@@ -14,11 +14,11 @@ sub new {
         fvg            => [],
         order_blocks   => [],
         choch_atr_mult => $args{choch_atr_mult} // 2.0,
-
+        break_source   => $args{break_source}   // 'close',
         prefix         => $args{prefix} // '',
         mode           => $args{mode}   // 'external',
         audit => {pivots => [], labels => [], bos => [], choch => [],},
-        
+        swing_length => $args{swing_length} // 50,
     };
 
     return bless $self, $class;
@@ -123,10 +123,174 @@ sub _audit_events_health {
     return $errors;
 }
 
-sub calculate {
-    my ($self, $pivots, $market) = @_;
+sub _make_structure_event {
+    my ($self, %args) = @_;
 
-    $self->{pivots}    = $pivots;
+    my $raw_type = $args{raw_type};
+
+    return {
+        type     => $self->{prefix} . $raw_type,
+        raw_type => $raw_type,
+        mode     => $self->{mode},
+
+        index       => $args{break_index},
+        break_index => $args{break_index},
+        break_price => $args{break_price},
+
+        pivot_index => $args{pivot}->{index},
+        pivot_price => $args{pivot}->{price},
+
+        price       => $args{pivot}->{price},
+        pivot       => $args{pivot}->{label},
+
+        trigger_pivot_index => $args{trigger_pivot}->{index}  // undef,
+        trigger_pivot_label => $args{trigger_label}           // undef,
+
+        trend_after => $args{trend_after},
+        break_size  => abs($args{break_price} - $args{pivot}->{price}),
+    };
+}
+
+sub _scan_structure_breaks {
+    my ($self, %args) = @_;
+
+    my $market       = $args{market};
+    my $from         = $args{from};
+    my $to           = $args{to};
+    my $active_high  = $args{active_high_ref};
+    my $active_low   = $args{active_low_ref};
+    my $trend_ref    = $args{trend_ref};
+    my $events_ref   = $args{events_ref};
+    my $pivot        = $args{trigger_pivot};
+    my $label        = $args{trigger_label};
+
+    return if !$market;
+    return if !defined $from || !defined $to;
+    return if $to < $from;
+
+    my $candles = $market->get_slice($from - 1, $to);
+    return if !$candles || @$candles < 2;
+
+    for my $local_i (1 .. $#$candles) {
+        my $global_i = ($from - 1) + $local_i;
+
+        my $prev_bar = $candles->[$local_i - 1];
+        my $bar      = $candles->[$local_i];
+
+        next if !$prev_bar || !$bar;
+
+        my $prev_close = $prev_bar->{close};
+        my $close      = $bar->{close};
+
+        next if !defined $prev_close || !defined $close;
+
+        # ==============================
+        # BOS / CHoCH alcista
+        # Equivalente a ta.crossover(close, highActivo)
+        # ==============================
+        if (
+            defined $$active_high
+            && !$$active_high->{crossed}
+            && defined $$active_high->{price}
+            && $global_i > $$active_high->{index}
+        ) {
+            my $level = $$active_high->{price};
+
+            my $cross_up =
+                $prev_close <= $level
+                &&
+                $close > $level;
+
+            if ($cross_up) {
+                my $raw_type = ($$trend_ref eq 'DOWN')
+                    ? 'CHoCH_UP'
+                    : 'BOS_UP';
+
+                my $event = $self->_make_structure_event(
+                    raw_type       => $raw_type,
+                    break_index    => $global_i,
+                    break_price    => $close,
+                    pivot          => $$active_high,
+                    trigger_pivot  => $pivot // {},
+                    trigger_label  => $label,
+                    trend_after    => 'UP',
+                );
+
+                $event->{direction} = 'bullish';
+                $event->{side}      = 'bullish';
+                $event->{label}     = $raw_type =~ /CHoCH/ ? 'CHoCH' : 'BOS';
+
+                push @{$self->{events}}, $event;
+                push @$events_ref, $raw_type if $events_ref;
+
+                if ($raw_type =~ /BOS/) {
+                    push @{$self->{audit}->{bos}}, $event;
+                }
+                elsif ($raw_type =~ /CHoCH/) {
+                    push @{$self->{audit}->{choch}}, $event;
+                }
+
+                $$active_high->{crossed} = 1;
+                $$trend_ref = 'UP';
+            }
+        }
+
+        # ==============================
+        # BOS / CHoCH bajista
+        # Equivalente a ta.crossunder(close, lowActivo)
+        # ==============================
+        if (
+            defined $$active_low
+            && !$$active_low->{crossed}
+            && defined $$active_low->{price}
+            && $global_i > $$active_low->{index}
+        ) {
+            my $level = $$active_low->{price};
+
+            my $cross_down =
+                $prev_close >= $level
+                &&
+                $close < $level;
+
+            if ($cross_down) {
+                my $raw_type = ($$trend_ref eq 'UP')
+                    ? 'CHoCH_DOWN'
+                    : 'BOS_DOWN';
+
+                my $event = $self->_make_structure_event(
+                    raw_type       => $raw_type,
+                    break_index    => $global_i,
+                    break_price    => $close,
+                    pivot          => $$active_low,
+                    trigger_pivot  => $pivot // {},
+                    trigger_label  => $label,
+                    trend_after    => 'DOWN',
+                );
+
+                $event->{direction} = 'bearish';
+                $event->{side}      = 'bearish';
+                $event->{label}     = $raw_type =~ /CHoCH/ ? 'CHoCH' : 'BOS';
+
+                push @{$self->{events}}, $event;
+                push @$events_ref, $raw_type if $events_ref;
+
+                if ($raw_type =~ /BOS/) {
+                    push @{$self->{audit}->{bos}}, $event;
+                }
+                elsif ($raw_type =~ /CHoCH/) {
+                    push @{$self->{audit}->{choch}}, $event;
+                }
+
+                $$active_low->{crossed} = 1;
+                $$trend_ref = 'DOWN';
+            }
+        }
+    }
+}
+
+sub calculate {
+    my ($self, $pivots_ignored, $market) = @_;
+
     $self->{structure} = [];
     $self->{events}    = [];
     $self->{audit}     = {
@@ -135,223 +299,244 @@ sub calculate {
         choch  => [],
     };
 
+    return {
+        structure    => [],
+        events       => [],
+        fvg          => [],
+        order_blocks => [],
+        audit        => $self->{audit},
+    } if !$market;
+
+    my $last_index = $market->last_index();
+
+    my $candles = $market->get_slice(0, $last_index);
+    return {
+        structure    => [],
+        events       => [],
+        fvg          => [],
+        order_blocks => [],
+        audit        => $self->{audit},
+    } if !$candles || @$candles < 10;
+
+    my $size = $self->{mode} eq 'internal'
+        ? 5
+        : ($self->{swing_length} // 50);
+
+    my $leg_state = 0;
+    my $prev_leg_state;
+
     my $last_high;
     my $last_low;
-
-    my $trend = 'UNKNOWN';
 
     my $active_high;
     my $active_low;
 
-    my $last_scan_index = undef;
+    my $trend = 0; # 1 bullish, -1 bearish, 0 unknown
 
-    for my $pivot (@$pivots) {
+    for my $i (0 .. $#$candles) {
+        my $bar = $candles->[$i];
+        next if !$bar;
 
-        my $label;
+        # ==============================
+        # 1. Detectar pivote estilo LuxAlgo
+        # ==============================
+        if ($i >= $size) {
+            my $pivot_i = $i - $size;
+            my $pivot_bar = $candles->[$pivot_i];
 
-        if ($pivot->{type} eq 'HIGH') {
-            $label = !defined $last_high
-                ? 'H'
-                : ($pivot->{price} > $last_high->{price} ? 'HH' : 'LH');
+            my $highest_after = $candles->[$i - $size + 1]{high};
+            my $lowest_after  = $candles->[$i - $size + 1]{low};
 
-            $last_high = $pivot;
-        }
-        elsif ($pivot->{type} eq 'LOW') {
-            $label = !defined $last_low
-                ? 'L'
-                : ($pivot->{price} > $last_low->{price} ? 'HL' : 'LL');
+            for my $j ($i - $size + 1 .. $i) {
+                $highest_after = $candles->[$j]{high}
+                    if $candles->[$j]{high} > $highest_after;
 
-            $last_low = $pivot;
-        }
-        else {
-            next;
-        }
+                $lowest_after = $candles->[$j]{low}
+                    if $candles->[$j]{low} < $lowest_after;
+            }
 
-        my @events_this_pivot;
+            my $new_high = $pivot_bar->{high} > $highest_after;
+            my $new_low  = $pivot_bar->{low}  < $lowest_after;
 
-        # 1. Escanear vela por vela desde el último pivote procesado
-        if (defined $market && defined $last_scan_index) {
+            $prev_leg_state = $leg_state;
 
-            my $from = $last_scan_index + 1;
-            my $to   = $pivot->{index};
+            if ($new_high) {
+                $leg_state = 0; # bearish leg
+            }
+            elsif ($new_low) {
+                $leg_state = 1; # bullish leg
+            }
 
-            if ($to >= $from) {
+            my $changed = defined $prev_leg_state && $leg_state != $prev_leg_state;
 
-                my $candles = $market->get_slice($from, $to);
+            if ($changed) {
 
-                for my $local_i (0 .. $#$candles) {
+                # startOfBearishLeg => HIGH pivot
+                if ($prev_leg_state == 1 && $leg_state == 0) {
+                    my $label = !defined $last_high
+                        ? 'H'
+                        : ($pivot_bar->{high} > $last_high->{price} ? 'HH' : 'LH');
 
-                    my $global_i = $from + $local_i;
-                    my $bar      = $candles->[$local_i];
-                    my $close    = $bar->{close};
+                    my $pivot = {
+                        type      => 'HIGH',
+                        index     => $pivot_i,
+                        price     => $pivot_bar->{high},
+                        label     => $self->{prefix} . $label,
+                        raw_label => $label,
+                        mode      => $self->{mode},
+                        source    => $self->{mode} eq 'internal' ? 'LuxAlgoInternal5' : 'LuxAlgoSwing',
+                        crossed   => 0,
+                    };
 
-                    # Ruptura alcista de nivel HIGH activo
-                    if (
-                        defined $active_high
-                        && !$active_high->{crossed}
-                        && defined $close
-                        && $close > $active_high->{price}
-                    ) {
-                        my $event = ($trend eq 'DOWN')
-                            ? 'CHoCH_UP'
-                            : 'BOS_UP';
+                    $last_high   = $pivot;
+                    $active_high = { %$pivot, crossed => 0 };
 
-                        my $event_record = {
-                            type     => $self->{prefix} . $event,
-                            raw_type => $event,
-                            mode     => $self->{mode},
+                    push @{$self->{structure}}, $pivot;
+                    push @{$self->{audit}->{labels}}, $pivot;
+                }
 
-                            index       => $global_i,
-                            break_index => $global_i,
-                            break_price => $close,
+                # startOfBullishLeg => LOW pivot
+                elsif ($prev_leg_state == 0 && $leg_state == 1) {
+                    my $label = !defined $last_low
+                        ? 'L'
+                        : ($pivot_bar->{low} > $last_low->{price} ? 'HL' : 'LL');
 
-                            pivot_index => $active_high->{index},
-                            pivot_price => $active_high->{price},
+                    my $pivot = {
+                        type      => 'LOW',
+                        index     => $pivot_i,
+                        price     => $pivot_bar->{low},
+                        label     => $self->{prefix} . $label,
+                        raw_label => $label,
+                        mode      => $self->{mode},
+                        source    => $self->{mode} eq 'internal' ? 'LuxAlgoInternal5' : 'LuxAlgoSwing',
+                        crossed   => 0,
+                    };
 
-                            price       => $active_high->{price},
-                            pivot       => $active_high->{label},
+                    $last_low   = $pivot;
+                    $active_low = { %$pivot, crossed => 0 };
 
-                            trigger_pivot_index => $pivot->{index},
-                            trigger_pivot_label => $label,
-
-                            trend_after => 'UP',
-                            break_size  => $close - $active_high->{price},
-                        };
-
-                        push @{$self->{events}}, $event_record;
-                        push @events_this_pivot, $event;
-
-                        if ($event =~ /BOS/) {
-                            push @{$self->{audit}->{bos}}, $event_record;
-                        }
-                        elsif ($event =~ /CHoCH/) {
-                            push @{$self->{audit}->{choch}}, $event_record;
-                        }
-
-                        $active_high->{crossed} = 1;
-                        $trend = 'UP';
-                    }
-
-                    # Ruptura bajista de nivel LOW activo
-                    if (
-                        defined $active_low
-                        && !$active_low->{crossed}
-                        && defined $close
-                        && $close < $active_low->{price}
-                    ) {
-                        my $event = ($trend eq 'UP')
-                            ? 'CHoCH_DOWN'
-                            : 'BOS_DOWN';
-
-                        my $event_record = {
-                            type     => $self->{prefix} . $event,
-                            raw_type => $event,
-                            mode     => $self->{mode},
-
-                            index       => $global_i,
-                            break_index => $global_i,
-                            break_price => $close,
-
-                            pivot_index => $active_low->{index},
-                            pivot_price => $active_low->{price},
-
-                            price       => $active_low->{price},
-                            pivot       => $active_low->{label},
-
-                            trigger_pivot_index => $pivot->{index},
-                            trigger_pivot_label => $label,
-
-                            trend_after => 'DOWN',
-                            break_size  => $active_low->{price} - $close,
-                        };
-
-                        push @{$self->{events}}, $event_record;
-                        push @events_this_pivot, $event;
-
-                        if ($event =~ /BOS/) {
-                            push @{$self->{audit}->{bos}}, $event_record;
-                        }
-                        elsif ($event =~ /CHoCH/) {
-                            push @{$self->{audit}->{choch}}, $event_record;
-                        }
-
-                        $active_low->{crossed} = 1;
-                        $trend = 'DOWN';
-                    }
+                    push @{$self->{structure}}, $pivot;
+                    push @{$self->{audit}->{labels}}, $pivot;
                 }
             }
         }
 
-        # 2. Actualizar nivel activo DESPUÉS de revisar rupturas
-        if ($pivot->{type} eq 'HIGH') {
-            $active_high = {
-                %$pivot,
-                label   => $label,
-                crossed => 0,
+        # ==============================
+        # 2. Detectar BOS / CHoCH con crossover real
+        # ==============================
+        next if $i == 0;
+
+        my $prev_close = $candles->[$i - 1]{close};
+        my $close      = $bar->{close};
+
+        next if !defined $prev_close || !defined $close;
+
+        # Bullish BOS / CHoCH
+        if (
+            defined $active_high
+            && !$active_high->{crossed}
+            && $i > $active_high->{index}
+            && $prev_close <= $active_high->{price}
+            && $close > $active_high->{price}
+        ) {
+            my $raw_type = $trend == -1 ? 'CHoCH_UP' : 'BOS_UP';
+
+            my $event = {
+                type        => $self->{prefix} . $raw_type,
+                raw_type    => $raw_type,
+                mode        => $self->{mode},
+
+                index       => $i,
+                break_index => $i,
+                break_price => $close,
+
+                pivot_index => $active_high->{index},
+                pivot_price => $active_high->{price},
+                price       => $active_high->{price},
+                pivot       => $active_high->{label},
+
+                direction   => 'bullish',
+                side        => 'bullish',
+                label       => $raw_type =~ /CHoCH/ ? 'CHoCH' : 'BOS',
+                trend_after => 'UP',
+                break_size  => abs($close - $active_high->{price}),
             };
+
+            push @{$self->{events}}, $event;
+
+            if ($raw_type =~ /BOS/) {
+                push @{$self->{audit}->{bos}}, $event;
+            } else {
+                push @{$self->{audit}->{choch}}, $event;
+            }
+
+            $active_high->{crossed} = 1;
+            $trend = 1;
         }
-        elsif ($pivot->{type} eq 'LOW') {
-            $active_low = {
-                %$pivot,
-                label   => $label,
-                crossed => 0,
+
+        # Bearish BOS / CHoCH
+        if (
+            defined $active_low
+            && !$active_low->{crossed}
+            && $i > $active_low->{index}
+            && $prev_close >= $active_low->{price}
+            && $close < $active_low->{price}
+        ) {
+            my $raw_type = $trend == 1 ? 'CHoCH_DOWN' : 'BOS_DOWN';
+
+            my $event = {
+                type        => $self->{prefix} . $raw_type,
+                raw_type    => $raw_type,
+                mode        => $self->{mode},
+
+                index       => $i,
+                break_index => $i,
+                break_price => $close,
+
+                pivot_index => $active_low->{index},
+                pivot_price => $active_low->{price},
+                price       => $active_low->{price},
+                pivot       => $active_low->{label},
+
+                direction   => 'bearish',
+                side        => 'bearish',
+                label       => $raw_type =~ /CHoCH/ ? 'CHoCH' : 'BOS',
+                trend_after => 'DOWN',
+                break_size  => abs($close - $active_low->{price}),
             };
+
+            push @{$self->{events}}, $event;
+
+            if ($raw_type =~ /BOS/) {
+                push @{$self->{audit}->{bos}}, $event;
+            } else {
+                push @{$self->{audit}->{choch}}, $event;
+            }
+
+            $active_low->{crossed} = 1;
+            $trend = -1;
         }
-
-        my $event_for_structure = @events_this_pivot
-            ? join(',', @events_this_pivot)
-            : undef;
-
-        push @{$self->{audit}->{labels}}, {
-            index  => $pivot->{index},
-            type   => $pivot->{type},
-            price  => $pivot->{price},
-            label  => $label,
-            mode   => $self->{mode},
-            source => $pivot->{source} // 'ATR',
-            event  => $event_for_structure,
-            trend  => $trend,
-        };
-
-        my $final_label = $self->{prefix} . $label;
-
-        push @{$self->{structure}}, {
-            %$pivot,
-            label     => $final_label,
-            raw_label => $label,
-            mode      => $self->{mode},
-            event     => $event_for_structure,
-        };
-
-        $last_scan_index = $pivot->{index};
     }
 
-    my $last_index = @$pivots ? $pivots->[-1]{index} : undef;
+    my $last_pivot_index = @{$self->{structure}}
+        ? $self->{structure}->[-1]{index}
+        : undef;
 
-$self->{fvg} = $self->_detect_fvg($market, $last_index);
-$self->{order_blocks} = $self->_detect_order_blocks($market);
-
+    $self->{fvg} = $self->_detect_fvg($market, $last_pivot_index);
+    $self->{order_blocks} = $self->_detect_order_blocks($market);
     $self->{audit}->{event_health} = $self->_audit_events_health();
 
-    if ($self->{debug_audit}) {
-    print "\n---- SMC EVENT HEALTH ------------\n";
-    print "BOS direction errors     : $self->{audit}->{event_health}->{bos_direction_errors}\n";
-    print "CHoCH direction errors   : $self->{audit}->{event_health}->{choch_direction_errors}\n";
-    print "Break price errors       : $self->{audit}->{event_health}->{break_price_errors}\n";
-    print "Duplicate event errors   : $self->{audit}->{event_health}->{duplicate_event_errors}\n";
-    print "Long event warnings      : $self->{audit}->{event_health}->{long_event_warnings}\n";
-    print "----------------------------------\n";
+    return {
+        structure     => $self->{structure},
+        events        => $self->{events},
+        fvg           => $self->{fvg},
+        order_blocks  => $self->{order_blocks},
+        state         => $self->{state},
+        audit         => $self->{audit},
+    };
 }
 
-    return {
-    structure    => $self->{structure},
-    events       => $self->{events},
-    fvg          => $self->{fvg},
-    order_blocks => $self->{order_blocks},
-    state        => $self->{state},
-    audit        => $self->{audit},
-};
-}
+
 sub _detect_fvg {
     my ($self, $market, $last_index) = @_;
 
