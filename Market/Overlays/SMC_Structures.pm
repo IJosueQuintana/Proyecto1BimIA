@@ -109,11 +109,21 @@ sub draw {
             $x1 = $right_limit;
             $y1 = $y2 + $t * ($y1 - $y2);
         }
+                my $line_color;
+
+        if ($style eq 'internal') {
+            $line_color = ($b->{price} > $a->{price})
+                ? '#00C853'   # Verde: tramo alcista
+                : '#D50000';  # Rojo: tramo bajista
+        }
+        else {
+            $line_color = '#2962ff'; # Externo azul
+        }
 
         $canvas->createLine(
             $x1, $y1,
             $x2, $y2,
-            -fill  => '#2962ff',
+            -fill  => $line_color,
             -width => 2
         );
     }

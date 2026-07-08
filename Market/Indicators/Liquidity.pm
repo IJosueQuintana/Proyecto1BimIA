@@ -9,6 +9,9 @@ sub new {
     my $self = {
         atr_mult         => $args{atr_mult}         // 4.0,
         minor_atr_mult   => $args{minor_atr_mult}   // 1.5,
+        internal_zigzag_tf  => $args{internal_zigzag_tf}  // 60,
+        internal_zigzag_prd => $args{internal_zigzag_prd} // 2,
+        external_swing_len  => $args{external_swing_len}  // 150,
         volume_lookback      => $args{volume_lookback}      // 20,
         volume_mult          => $args{volume_mult}          // 2.8,
         volume_range_atr_min => $args{volume_range_atr_min} // 1.2,
@@ -43,6 +46,9 @@ sub new {
         structural_pivots_clean => [],
         internal_structure      => [],
         external_structure      => [],
+        internal_fibonacci      => [],
+
+
         audit => {pivots => [],},
 
 
@@ -75,6 +81,8 @@ sub reset {
     $self->{structural_pivots_clean} = [];
     $self->{internal_structure}      = [];
     $self->{external_structure}      = [];
+    $self->{internal_fibonacci}      = [];
+
     $self->{structural_pivots_clean} = [];
     $self->{audit}->{pivots} = [];
     $self->{audit}->{liquidity_classification} = {};
@@ -85,58 +93,57 @@ sub calculate_until {
 
     $self->reset();
 
+    $until_index = $#$candles if !defined $until_index || $until_index > $#$candles;
+    return {} if $until_index < 0;
+
+    $self->{internal_structure} = $self->_build_internal_zigzag_zzmtf(
+        $candles,
+        $until_index,
+        $self->{internal_zigzag_tf},
+        $self->{internal_zigzag_prd},
+    );
+
+    $self->{internal_fibonacci} = $self->_build_internal_fibonacci_zzmtf(
+    $self->{internal_structure}
+);
+
+    $self->{external_structure} = $self->_build_external_zigzag_chartprime(
+        $candles,
+        $until_index,
+        $self->{external_swing_len},
+    );
+
+    $self->{minor_pivots} = $self->{internal_structure};
+    $self->{pivots}      = $self->{external_structure};
+    $self->{structural_pivots_clean} = $self->{external_structure};
+
+    $self->_build_liquidity_from_external_structure();
+
     for my $i (0 .. $until_index) {
-        $self->process_bar($candles, $atr_values, $i);
+        my $bar = $candles->[$i];
+        next if !$bar;
+        $self->_update_liquidity_states($bar, $i);
     }
 
     $self->_detect_equal_levels();
 
-    my @external_candidates = (
-    @{$self->{pivots} || []},
-    @{$self->{volume_pivots} || []},
-    );
-
-    $self->_clean_zigzag_sequence(
-        \@external_candidates,
-        \$self->{external_structure},
-        'external'
-    );
-
-    $self->_clean_zigzag_sequence(
-        $self->{minor_pivots},
-        \$self->{internal_structure},
-        'internal'
-    );  
-
-$self->{structural_pivots_clean} = $self->{external_structure};
-
-    $self->_clean_structural_sequence();
-
-   if ($self->{debug_audit}) {
-    $self->audit_volume_pivots($candles, 20800, 21000);
-    $self->audit_clean_volume_sequence($candles, 20800, 21000);
-    $self->audit_liquidity_classification($candles);
-}
-
     return {
-        pivots                   => $self->{pivots},
-        structural_pivots        => $self->{external_structure},
-        external_structure       => $self->{external_structure},
-        internal_structure       => $self->{internal_structure},
+        pivots              => $self->{pivots},
+        structural_pivots   => $self->{external_structure},
+        external_structure  => $self->{external_structure},
+        internal_structure  => $self->{internal_structure},
 
-        raw_structural_pivots    => $self->{pivots},
-        raw_minor_pivots         => $self->{minor_pivots},
-        minor_pivots             => $self->{internal_structure},
+        raw_structural_pivots => $self->{pivots},
+        raw_minor_pivots      => $self->{minor_pivots},
+        minor_pivots          => $self->{internal_structure},
 
-        volume_pivots            => $self->{volume_pivots},
-        raw_structural_pivots    => $self->{pivots},
-        volume_pivots            => $self->{volume_pivots},
-        liquidity                => $self->{liquidity},
-        events                   => $self->{events},
-        equal_levels             => $self->{equal_levels},
+        volume_pivots       => $self->{volume_pivots},
+        liquidity           => $self->{liquidity},
+        events              => $self->{events},
+        equal_levels        => $self->{equal_levels},
         clean_volume_swings => $self->{clean_volume_swings},
-        audit => $self->{audit},
-        
+        audit               => $self->{audit},
+        internal_fibonacci => $self->{internal_fibonacci},
     };
 }
 
@@ -153,6 +160,463 @@ sub process_bar {
     $self->_process_structural_pivot($candles, $bar, $atr, $i);
     $self->_update_liquidity_states($bar, $i);
 }
+
+sub _bucket_epoch_for_tf {
+    my ($self, $epoch, $tf) = @_;
+
+    return undef if !defined $epoch;
+
+    if ($tf eq 'D') {
+        return int($epoch / 86400) * 86400;
+    }
+
+    if ($tf eq 'W') {
+        return int($epoch / (86400 * 7)) * (86400 * 7);
+    }
+
+    my $minutes = $tf + 0;
+    $minutes = 60 if $minutes <= 0;
+
+    my $seconds = $minutes * 60;
+    return int($epoch / $seconds) * $seconds;
+}
+
+sub _highest_index {
+    my ($self, $candles, $from, $to) = @_;
+
+    my $best_i = $from;
+    my $best_v = $candles->[$from]{high};
+
+    for my $i ($from .. $to) {
+        next if !$candles->[$i];
+        if ($candles->[$i]{high} >= $best_v) {
+            $best_v = $candles->[$i]{high};
+            $best_i = $i;
+        }
+    }
+
+    return $best_i;
+}
+
+sub _lowest_index {
+    my ($self, $candles, $from, $to) = @_;
+
+    my $best_i = $from;
+    my $best_v = $candles->[$from]{low};
+
+    for my $i ($from .. $to) {
+        next if !$candles->[$i];
+        if ($candles->[$i]{low} <= $best_v) {
+            $best_v = $candles->[$i]{low};
+            $best_i = $i;
+        }
+    }
+
+    return $best_i;
+}
+
+sub _zz_add_or_update {
+    my ($self, $zz, $pivot) = @_;
+
+    return if !$pivot;
+
+    my $last = $zz->[-1];
+
+    if (!$last) {
+        push @$zz, $pivot;
+        return;
+    }
+
+    if ($last->{type} eq $pivot->{type}) {
+        if (
+            ($pivot->{type} eq 'HIGH' && $pivot->{price} > $last->{price})
+            ||
+            ($pivot->{type} eq 'LOW'  && $pivot->{price} < $last->{price})
+        ) {
+            $zz->[-1] = $pivot;
+        }
+        return;
+    }
+
+    push @$zz, $pivot;
+}
+
+sub _build_internal_zigzag_zzmtf {
+    my ($self, $candles, $until_index, $tf, $prd) = @_;
+
+    $tf  //= 60;
+    $prd //= 2;
+
+    my @zigzag;
+    my @newbar_indices;
+
+    my $prev_bucket;
+    my $dir = 0;
+
+    for my $i (0 .. $until_index) {
+        my $bar = $candles->[$i];
+        next if !$bar;
+
+        my $bucket = $self->_bucket_epoch_for_tf($bar->{epoch}, $tf);
+
+        my $newbar = 0;
+        if (!defined $prev_bucket || $bucket != $prev_bucket) {
+            $newbar = 1;
+            push @newbar_indices, $i;
+            $prev_bucket = $bucket;
+        }
+
+        my $bi;
+        if (@newbar_indices >= $prd) {
+            $bi = $newbar_indices[-$prd];
+        } else {
+            $bi = 0;
+        }
+
+        my $len_from = $bi;
+        my $len_to   = $i;
+
+        my $hi_i = $self->_highest_index($candles, $len_from, $len_to);
+        my $lo_i = $self->_lowest_index($candles,  $len_from, $len_to);
+
+        my $ph = ($hi_i == $i) ? $bar->{high} : undef;
+        my $pl = ($lo_i == $i) ? $bar->{low}  : undef;
+
+        my $old_dir = $dir;
+
+        if (defined $ph && !defined $pl) {
+            $dir = 1;
+        }
+        elsif (defined $pl && !defined $ph) {
+            $dir = -1;
+        }
+
+        next if !defined $ph && !defined $pl;
+        next if $dir == 0;
+
+        my $value = $dir == 1 ? $ph : $pl;
+
+        my $pivot = {
+            type           => $dir == 1 ? 'HIGH' : 'LOW',
+            index          => $i,
+            price          => $value,
+            source         => 'ZZMTF',
+            tier           => 'internal',
+            structure_mode => 'internal',
+            tf             => $tf,
+            prd            => $prd,
+            timestamp      => $bar->{time},
+        };
+
+        if (!@zigzag) {
+            push @zigzag, $pivot;
+            next;
+        }
+
+        my $last = $zigzag[-1];
+
+        my $dir_changed = ($dir != $old_dir) ? 1 : 0;
+
+        if ($dir_changed) {
+            push @zigzag, $pivot;
+        }
+        else {
+            if (
+                ($dir == 1  && $pivot->{price} > $last->{price})
+                ||
+                ($dir == -1 && $pivot->{price} < $last->{price})
+            ) {
+                $zigzag[-1] = $pivot;
+            }
+        }
+    }
+
+    return \@zigzag;
+}
+sub _build_internal_fibonacci_zzmtf {
+    my ($self, $internal_structure) = @_;
+
+    my @levels;
+    return \@levels if !$internal_structure || @$internal_structure < 2;
+
+    my $a = $internal_structure->[-2];
+    my $b = $internal_structure->[-1];
+
+    return \@levels if !$a || !$b;
+    return \@levels if !defined $a->{price} || !defined $b->{price};
+
+    my @ratios = (
+        0.000,
+        0.236,
+        0.382,
+        0.500,
+        0.618,
+        0.786,
+        1.000,
+    );
+
+    my $diff = $a->{price} - $b->{price};
+
+    for my $ratio (@ratios) {
+        push @levels, {
+            ratio       => $ratio,
+            price       => $b->{price} + ($diff * $ratio),
+            from_index  => $a->{index},
+            to_index    => $b->{index},
+            from_price  => $a->{price},
+            to_price    => $b->{price},
+            source      => 'ZZMTF_Fibonacci',
+            tier        => 'internal',
+        };
+    }
+
+    return \@levels;
+}
+
+
+sub _build_external_zigzag_chartprime {
+    my ($self, $candles, $until_index, $swing_len) = @_;
+
+    $swing_len //= 150;
+
+    my @zigzag;
+
+    my $is_bullish;
+    my $prev_is_bullish;
+
+    my ($bar_index_low,  $price_low);
+    my ($bar_index_high, $price_high);
+
+    my ($last_price_low, $last_price_high);
+
+    for my $i (1 .. $until_index) {
+        my $bar  = $candles->[$i];
+        my $prev = $candles->[$i - 1];
+
+        next if !$bar || !$prev;
+
+        my $from_now = $i - $swing_len + 1;
+        $from_now = 0 if $from_now < 0;
+
+        my $from_prev = ($i - 1) - $swing_len + 1;
+        $from_prev = 0 if $from_prev < 0;
+
+        my $swing_high_i      = $self->_highest_index($candles, $from_now,  $i);
+        my $swing_low_i       = $self->_lowest_index($candles,  $from_now,  $i);
+        my $prev_swing_high_i = $self->_highest_index($candles, $from_prev, $i - 1);
+        my $prev_swing_low_i  = $self->_lowest_index($candles,  $from_prev, $i - 1);
+
+        my $swing_high_price = $candles->[$swing_high_i]{high};
+        my $swing_low_price  = $candles->[$swing_low_i]{low};
+
+        $prev_is_bullish = $is_bullish;
+
+        if ($swing_high_i == $i) {
+            $is_bullish = 1;
+        }
+
+        if ($swing_low_i == $i) {
+            $is_bullish = 0;
+        }
+
+        if (
+            $prev_swing_high_i == $i - 1
+            && $bar->{high} < $swing_high_price
+        ) {
+            $bar_index_high = $i - 1;
+            $price_high     = $prev->{high};
+        }
+
+        if (
+            $prev_swing_low_i == $i - 1
+            && $bar->{low} > $swing_low_price
+        ) {
+            $bar_index_low = $i - 1;
+            $price_low     = $prev->{low};
+        }
+
+        next if !defined $is_bullish;
+
+        if (
+            defined $prev_is_bullish
+            && $prev_is_bullish != $is_bullish
+            && $is_bullish
+            && defined $bar_index_low
+            && defined $price_low
+            && defined $bar_index_high
+            && defined $price_high
+        ) {
+            push @zigzag, {
+                type           => 'LOW',
+                index          => $bar_index_low,
+                price          => $price_low,
+                source         => 'ChartPrimeLow',
+                tier           => 'external',
+                structure_mode => 'external',
+                swing_len      => $swing_len,
+                timestamp      => $candles->[$bar_index_low]{time},
+            };
+
+            push @zigzag, {
+                type           => 'HIGH',
+                index          => $bar_index_high,
+                price          => $price_high,
+                source         => 'ChartPrimeHigh',
+                tier           => 'external',
+                structure_mode => 'external',
+                swing_len      => $swing_len,
+                timestamp      => $candles->[$bar_index_high]{time},
+            };
+        }
+
+        if (
+            defined $prev_is_bullish
+            && $prev_is_bullish != $is_bullish
+            && !$is_bullish
+            && defined $bar_index_high
+            && defined $price_high
+            && defined $bar_index_low
+            && defined $price_low
+        ) {
+            push @zigzag, {
+                type           => 'HIGH',
+                index          => $bar_index_high,
+                price          => $price_high,
+                source         => 'ChartPrimeHigh',
+                tier           => 'external',
+                structure_mode => 'external',
+                swing_len      => $swing_len,
+                timestamp      => $candles->[$bar_index_high]{time},
+            };
+
+            push @zigzag, {
+                type           => 'LOW',
+                index          => $bar_index_low,
+                price          => $price_low,
+                source         => 'ChartPrimeLow',
+                tier           => 'external',
+                structure_mode => 'external',
+                swing_len      => $swing_len,
+                timestamp      => $candles->[$bar_index_low]{time},
+            };
+        }
+
+        # Equivalente a line.set_xy2 cuando la dirección sigue alcista
+        if (
+            $is_bullish
+            && defined $bar_index_high
+            && defined $price_high
+            && @zigzag
+            && $zigzag[-1]{type} eq 'HIGH'
+        ) {
+            $zigzag[-1] = {
+                type           => 'HIGH',
+                index          => $bar_index_high,
+                price          => $price_high,
+                source         => 'ChartPrimeActiveHigh',
+                tier           => 'external',
+                structure_mode => 'external',
+                swing_len      => $swing_len,
+                timestamp      => $candles->[$bar_index_high]{time},
+            };
+        }
+
+        # Equivalente a line.set_xy2 cuando la dirección sigue bajista
+        if (
+            !$is_bullish
+            && defined $bar_index_low
+            && defined $price_low
+            && @zigzag
+            && $zigzag[-1]{type} eq 'LOW'
+        ) {
+            $zigzag[-1] = {
+                type           => 'LOW',
+                index          => $bar_index_low,
+                price          => $price_low,
+                source         => 'ChartPrimeActiveLow',
+                tier           => 'external',
+                structure_mode => 'external',
+                swing_len      => $swing_len,
+                timestamp      => $candles->[$bar_index_low]{time},
+            };
+        }
+    }
+
+    my @clean;
+
+    for my $p (@zigzag) {
+        next if !$p;
+        next if !defined $p->{index};
+        next if !defined $p->{type};
+        next if !defined $p->{price};
+
+        if (@clean && $clean[-1]{index} == $p->{index} && $clean[-1]{type} eq $p->{type}) {
+            $clean[-1] = $p;
+            next;
+        }
+
+        if (@clean && $clean[-1]{type} eq $p->{type}) {
+            if (
+                ($p->{type} eq 'HIGH' && $p->{price} > $clean[-1]{price})
+                ||
+                ($p->{type} eq 'LOW' && $p->{price} < $clean[-1]{price})
+            ) {
+                $clean[-1] = $p;
+            }
+            next;
+        }
+
+        push @clean, $p;
+    }
+
+    return \@clean;
+}
+
+sub _build_liquidity_from_external_structure {
+    my ($self) = @_;
+
+    $self->{liquidity} = [];
+
+    for my $p (@{$self->{external_structure} || []}) {
+        next if !$p;
+        next if !defined $p->{type};
+        next if !defined $p->{price};
+        next if !defined $p->{index};
+
+        if ($p->{type} eq 'HIGH') {
+            push @{$self->{liquidity}}, {
+                type           => 'BSL',
+                state          => 'Detected',
+                index          => $p->{index},
+                created_index  => $p->{index},
+                swept_index    => undef,
+                resolved_index => undef,
+                price          => $p->{price},
+                source         => 'ExternalZigZagHigh',
+                tier           => 'external',
+                classification => undef,
+                outside_count  => 0,
+            };
+        }
+        elsif ($p->{type} eq 'LOW') {
+            push @{$self->{liquidity}}, {
+                type           => 'SSL',
+                state          => 'Detected',
+                index          => $p->{index},
+                created_index  => $p->{index},
+                swept_index    => undef,
+                resolved_index => undef,
+                price          => $p->{price},
+                source         => 'ExternalZigZagLow',
+                tier           => 'external',
+                classification => undef,
+                outside_count  => 0,
+            };
+        }
+    }
+}
+
+
 
 sub _avg_volume {
     my ($self, $candles, $i) = @_;
@@ -608,7 +1072,8 @@ sub _update_liquidity_states {
     my $run_bars      = $self->{confirm_bars} // 3;
 
     for my $lvl (@{$self->{liquidity}}) {
-
+        
+        next if defined $lvl->{created_index} && $i <= $lvl->{created_index};
         next if $lvl->{state} eq 'Resolved';
 
         my $price = $lvl->{price};
