@@ -90,10 +90,17 @@ sub new {
         price_panel => Market::Panels::PricePanel->new(),
         atr_panel   => Market::Panels::ATRPanel->new(),
 
+                internal_zigzag_tf  => 60,
+        internal_zigzag_prd => 2,
+        external_swing_len  => 150,
+
         liquidity_engine => Market::Indicators::Liquidity->new(
-            atr_mult       => 4.0,
-            minor_atr_mult => 1.5,
-            confirm_bars   => 3,
+            atr_mult             => 4.0,
+            minor_atr_mult       => 1.5,
+            confirm_bars         => 3,
+            internal_zigzag_tf   => 60,
+            internal_zigzag_prd  => 2,
+            external_swing_len   => 150,
         ),
 
         smc_external_engine => Market::Indicators::SMC_Structures->new(
@@ -157,6 +164,9 @@ sub run {
         ['D',   'D'],
         ['W',   'W'],
     );
+
+    internal_zigzag_tf_label => '1 hora',
+    internal_zigzag_tf       => 60,
 
     my $selected_tf_label = '1m';
 
@@ -249,8 +259,95 @@ sub run {
         }
     );
 
+        # ==============================
+    # Selector de temporalidad ZZ Interno
+    # ==============================
 
+    my @zz_internal_timeframes = (
+        ['3 minutos',  3],
+        ['5 minutos',  5],
+        ['10 minutos', 10],
+        ['15 minutos', 15],
+        ['30 minutos', 30],
+        ['45 minutos', 45],
+        ['1 hora',     60],
+        ['2 horas',    120],
+        ['3 horas',    180],
+        ['4 horas',    240],
+        ['1 día',      'D'],
+        ['1 semana',   'W'],
+    );
 
+    $self->{internal_zigzag_tf_label} //= '1 hora';
+    $self->{internal_zigzag_tf}       //= 60;
+
+    my $zz_selected_label = $self->{internal_zigzag_tf_label};
+
+    my $zz_tf_display = $top->Button(
+        -text  => "ZZ Interno: $zz_selected_label",
+        -width => 20,
+    )->pack(-side => 'left', -padx => 4);
+
+    my $zz_tf_popup = $mw->Toplevel();
+    $zz_tf_popup->withdraw();
+    $zz_tf_popup->overrideredirect(1);
+
+    my $zz_tf_list = $zz_tf_popup->Listbox(
+        -height          => 10,
+        -width           => 14,
+        -exportselection => 0,
+    )->pack(-side => 'left');
+
+    my $zz_tf_scroll = $zz_tf_popup->Scrollbar(
+        -orient  => 'vertical',
+        -command => ['yview', $zz_tf_list],
+    )->pack(-side => 'right', -fill => 'y');
+
+    $zz_tf_list->configure(
+        -yscrollcommand => ['set', $zz_tf_scroll]
+    );
+
+    for my $item (@zz_internal_timeframes) {
+        $zz_tf_list->insert('end', $item->[0]);
+    }
+
+    $zz_tf_display->configure(
+        -command => sub {
+            if ($zz_tf_popup->state eq 'withdrawn') {
+                my $x = $zz_tf_display->rootx;
+                my $y = $zz_tf_display->rooty + $zz_tf_display->height;
+                $zz_tf_popup->geometry("+$x+$y");
+                $zz_tf_popup->deiconify();
+                $zz_tf_popup->raise();
+            } else {
+                $zz_tf_popup->withdraw();
+            }
+        }
+    );
+
+    $zz_tf_list->bind('<<ListboxSelect>>' => sub {
+        my @sel = $zz_tf_list->curselection;
+        return if !@sel;
+
+        my $pos = $sel[0];
+        my ($label, $tf) = @{$zz_internal_timeframes[$pos]};
+
+        $self->{internal_zigzag_tf_label} = $label;
+        $self->{internal_zigzag_tf}       = $tf;
+
+        $zz_tf_display->configure(
+            -text => "ZZ Interno: $label"
+        );
+
+        $zz_tf_popup->withdraw();
+
+        if ($self->{liquidity_engine}) {
+            $self->{liquidity_engine}->{internal_zigzag_tf} = $tf;
+        }
+
+        $self->{smc_cache_key} = undef;
+        $self->draw();
+    });
 
 
     $top->Checkbutton(
@@ -512,13 +609,29 @@ sub update_smc_overlay {
         W   => 0.6,
     );
 
-    $self->{liquidity_engine}->{atr_mult} =
+        $self->{liquidity_engine}->{atr_mult} =
         $tf_atr_mult{$tf} // 4.0;
 
     $self->{liquidity_engine}->{minor_atr_mult} =
         $tf_minor_mult{$tf} // 1.5;
 
-    my $cache_key = join(':', $tf, $until_index);
+    $self->{liquidity_engine}->{internal_zigzag_tf} =
+        $self->{internal_zigzag_tf} // 60;
+
+    $self->{liquidity_engine}->{internal_zigzag_prd} =
+        $self->{internal_zigzag_prd} // 2;
+
+    $self->{liquidity_engine}->{external_swing_len} =
+        $self->{external_swing_len} // 150;
+
+    my $cache_key = join(
+        ':',
+        $tf,
+        $until_index,
+        $self->{internal_zigzag_tf} // 60,
+        $self->{internal_zigzag_prd} // 2,
+        $self->{external_swing_len} // 150,
+    );
 
     return if defined $self->{smc_cache_key}
         && $self->{smc_cache_key} eq $cache_key;
@@ -2281,6 +2394,36 @@ sub _toggle_layers_panel {
 
     $self->{layers_panel_visible} = 1;
 }
+sub _set_internal_zigzag_tf {
+    my ($self, $label) = @_;
+
+    my %map = (
+        '3 minutos'  => 3,
+        '5 minutos'  => 5,
+        '10 minutos' => 10,
+        '15 minutos' => 15,
+        '30 minutos' => 30,
+        '45 minutos' => 45,
+        '1 hora'     => 60,
+        '2 horas'    => 120,
+        '3 horas'    => 180,
+        '4 horas'    => 240,
+        '1 día'      => 'D',
+        '1 semana'   => 'W',
+    );
+
+    $self->{internal_zigzag_tf_label} = $label;
+    $self->{internal_zigzag_tf} = $map{$label} // 60;
+
+    $self->{smc_cache_key} = undef;
+
+    if ($self->{liquidity_engine}) {
+        $self->{liquidity_engine}->{internal_zigzag_tf} = $self->{internal_zigzag_tf};
+    }
+
+    $self->draw();
+}
+
 
 sub _build_layers_panel {
     my ($self) = @_;
@@ -2353,6 +2496,62 @@ sub _build_layers_panel {
 
         $r++;
     }
+
+        $panel->Label(
+        -text => 'ZZ interno TF',
+    )->grid(
+        -row => $r,
+        -column => 0,
+        -sticky => 'w',
+        -padx => 8,
+        -pady => 2,
+    );
+
+    $panel->Optionmenu(
+        -options  => [3, 5, 10, 15, 30, 45, 60, 120, 180, 240, 'D', 'W'],
+        -variable => \$self->{internal_zigzag_tf},
+        -command  => sub {
+            $self->{smc_cache_key} = undef;
+            $self->draw();
+        },
+    )->grid(
+        -row => $r,
+        -column => 1,
+        -columnspan => 2,
+        -sticky => 'w',
+    );
+
+    $r++;
+
+    $panel->Label(
+        -text => 'ZZ externo Len',
+    )->grid(
+        -row => $r,
+        -column => 0,
+        -sticky => 'w',
+        -padx => 8,
+        -pady => 2,
+    );
+
+    $panel->Scale(
+        -from       => 50,
+        -to         => 300,
+        -orient     => 'horizontal',
+        -resolution => 10,
+        -variable   => \$self->{external_swing_len},
+        -command    => sub {
+            $self->{smc_cache_key} = undef;
+            $self->draw();
+        },
+    )->grid(
+        -row => $r,
+        -column => 1,
+        -columnspan => 2,
+        -sticky => 'we',
+    );
+
+    $r++;
+
 
     $panel->Button(
         -text => 'Ocultar todo',
