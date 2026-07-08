@@ -165,8 +165,8 @@ sub run {
         ['W',   'W'],
     );
 
-    internal_zigzag_tf_label => '1 hora',
-    internal_zigzag_tf       => 60,
+        $self->{internal_zigzag_tf_label} //= '1 hora';
+    $self->{internal_zigzag_tf}       //= 60;
 
     my $selected_tf_label = '1m';
 
@@ -372,55 +372,55 @@ sub run {
     $top->Button(
     -text    => 'Replay',
     -command => sub { $self->replay_select_start(); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
-$top->Button(
+    $top->Button(
     -text    => 'Play',
     -command => sub { $self->replay_play(); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
-$top->Button(
+    $top->Button(
     -text    => 'Pause',
     -command => sub { $self->replay_pause(); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
-$top->Button(
+    $top->Button(
     -text    => 'Step +',
     -command => sub { $self->replay_step(1); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
-$top->Button(
+    $top->Button(
     -text    => 'Step -',
     -command => sub { $self->replay_step(-1); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
-$top->Button(
+    $top->Button(
     -text    => 'Exit Replay',
     -command => sub { $self->replay_exit(); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
 
 
-$top->Button(
+    $top->Button(
     -text    => 'VOL',
     -command => sub {
         $self->{show_volume_pivots} = !$self->{show_volume_pivots};
         $self->draw();
     }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
 
-$top->Checkbutton(
+    $top->Checkbutton(
     -text     => 'FVG',
     -variable => \$self->{show_fvg},
     -command  => sub { $self->draw(); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
-$top->Checkbutton(
+    $top->Checkbutton(
     -text     => 'Order Blocks',
     -variable => \$self->{show_order_blocks},
     -command  => sub { $self->draw(); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
 
 
