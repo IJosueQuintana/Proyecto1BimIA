@@ -11,6 +11,7 @@ use Market::Overlays::SMC_Structures;
 use Market::Indicators::Liquidity;
 use Market::Indicators::SMC_Structures;
 use Market::Overlays::Liquidity;
+use Market::Overlays::TrendLines;
 
 sub new {
     my ($class, %args) = @_;
@@ -83,7 +84,7 @@ sub new {
 
         show_fvg          => 0,
         show_order_blocks => 0,
-
+        show_trend_line   => 0,
 
         show_volume_pivots => 0,
 
@@ -120,6 +121,8 @@ sub new {
         liquidity_overlay => Market::Overlays::Liquidity->new(
             liq_result => undef,
         ),
+
+        trend_overlay => Market::Overlays::TrendLines->new(),
 
         smc_cache_key     => undef,
         last_liq_result   => undef,
@@ -422,11 +425,18 @@ sub run {
     -command  => sub { $self->draw(); }
     )->pack(-side => 'left');
 
-
-
-
-
-
+    $top->Checkbutton(
+    -text     => 'Trend Line',
+    -variable => \$self->{show_trend_line},
+    -command  => sub {
+        $self->{layers}{external}{trend_line} = $self->{show_trend_line};
+        $self->{layers}{internal}{trend_line} = $self->{show_trend_line};
+        if (!$self->{show_trend_line}) {
+            $self->{trend_overlay}->clear() if $self->{trend_overlay};
+        }
+        $self->draw();
+    }
+    )->pack(-side => 'left');
 
     my $canvas = $mw->Canvas(
         -background         => 'white',
@@ -531,6 +541,7 @@ sub set_timeframe {
     $self->_replay_apply_window();
 }
     $self->{smc_cache_key} = undef;
+    $self->{trend_overlay}->clear() if $self->{trend_overlay};
     $self->{indicators}->reset_all();
     $self->{indicators}->update_last($self->{market});
     $self->{locked_index} = undef;
@@ -772,7 +783,8 @@ my $needs_smc_or_liquidity =
     || $self->{show_ssl}
     || $self->{show_eqh}
     || $self->{show_eql}
-    || $self->{show_volume_pivots};
+    || $self->{show_volume_pivots}
+    || $self->{show_trend_line};
 
 $self->update_smc_overlay($calc_until) if $needs_smc_or_liquidity;
 
@@ -871,6 +883,19 @@ if ($self->{show_order_blocks}) {
         $self->{last_smc_external}->{order_blocks} || [],
     );
 }
+
+    if ($self->{show_trend_line}) {
+        $self->{trend_overlay}->draw(
+            $c,
+            $data,
+            $start,
+            $end,
+            $x_of,
+            \%state,
+            $self->{price_panel},
+            result => $self->{last_smc_external},
+        );
+    }
 
     if ($self->{show_bsl} || $self->{show_ssl} || $self->{show_eqh} || $self->{show_eql} || $self->{show_liquidity_events}) {
         $self->{liquidity_overlay}->{show_ssl} = $self->{show_ssl};
@@ -2361,7 +2386,8 @@ sub _build_layer_group {
         ['eql',              'EQL'],
         ['liquidity_events', 'Sweep / Grab / Run'],
         ['fvg',              'FVG'],
-['order_blocks',     'Order Blocks'],
+        ['order_blocks',     'Order Blocks'],
+        ['trend_line',       'Trend Line'],
     );
 
     for my $item (@items) {
@@ -2460,7 +2486,8 @@ sub _build_layers_panel {
         ['eql',              'EQL'],
         ['liquidity_events', 'Sweep / Grab / Run'],
         ['fvg',              'FVG'],
-          ['order_blocks',     'Order Blocks'],
+        ['order_blocks',     'Order Blocks'],
+        ['trend_line',       'Trend Line'],
     );
 
     my $r = 1;
@@ -2624,6 +2651,10 @@ sub _sync_layer_flags {
 $self->{show_order_blocks} =
     $self->{layers}{external}{order_blocks}
     || $self->{layers}{internal}{order_blocks};
+
+$self->{show_trend_line} =
+    $self->{layers}{external}{trend_line}
+    || $self->{layers}{internal}{trend_line};
         
 }
 
@@ -2672,6 +2703,7 @@ sub _build_layers_popup {
         ['eqh',              'EQH'],
         ['eql',              'EQL'],
         ['liquidity_events', 'Sweep / Grab / Run'],
+        ['trend_line',       'Trend Line'],
     );
 
     my $r = 1;
