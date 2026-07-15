@@ -55,21 +55,39 @@ sub new {
         layers_panel         => undef,
 
         layers => {
-    internal => {
-        zigzag => 0, labels => 0, bos => 0, choch => 0,
-        bsl => 0, ssl => 0, eqh => 0, eql => 0,
-        liquidity_events => 0,
-        fvg => 0,
-        order_blocks => 0,
-    },
-    external => {
-        zigzag => 0, labels => 0, bos => 0, choch => 0,
-        bsl => 0, ssl => 0, eqh => 0, eql => 0,
-        liquidity_events => 0,
-        fvg => 0,
-        order_blocks => 0,
-    },
-},
+
+            internal => {
+                zigzag => 0,
+                labels => 0,
+                bos    => 0,
+                choch  => 0,
+
+                fvg          => 0,
+                order_blocks => 0,
+            },
+
+            external => {
+                zigzag => 0,
+                labels => 0,
+                bos    => 0,
+                choch  => 0,
+
+                bsl => 0,
+                ssl => 0,
+
+                liquidity_events => 0,
+
+                fvg          => 0,
+                order_blocks => 0,
+            },
+
+            # EQH/EQL no son internos ni externos.
+            # Son una estructura independiente, igual que en LuxAlgo.
+            equal => {
+                eqh => 0,
+                eql => 0,
+            },
+        },
 
         show_external_labels => 0,
         show_internal_labels => 0,
@@ -90,27 +108,50 @@ sub new {
         price_panel => Market::Panels::PricePanel->new(),
         atr_panel   => Market::Panels::ATRPanel->new(),
 
-                internal_zigzag_tf  => 60,
+        internal_zigzag_tf  => 60,
         internal_zigzag_prd => 2,
+
+        # Longitud interna utilizada por el indicador SMC.
+        internal_smc_len    => 5,
+
+        equal_smc_len => 3,
+
         external_swing_len  => 150,
 
         liquidity_engine => Market::Indicators::Liquidity->new(
-            atr_mult             => 4.0,
-            minor_atr_mult       => 1.5,
-            confirm_bars         => 3,
-            internal_zigzag_tf   => 60,
-            internal_zigzag_prd  => 2,
-            external_swing_len   => 150,
-        ),
+        atr_mult             => 4.0,
+        minor_atr_mult       => 1.5,
+        confirm_bars         => 3,
+
+        # ZigZag interno MTF configurable.
+        internal_zigzag_tf   => 60,
+        internal_zigzag_prd  => 2,
+
+        # Estructura interna SMC del timeframe activo.
+        internal_smc_len     => 5,
+
+        equal_smc_len => 3,
+        eq_tolerance => 0.10,
+
+        external_swing_len   => 150,
+    ),
 
         smc_external_engine => Market::Indicators::SMC_Structures->new(
             prefix => '',
             mode   => 'external',
         ),
 
+        # Motor exclusivamente visual para el ZigZag interno MTF
+        # y sus etiquetas HH/HL/LH/LL.
+        smc_internal_visual_engine => Market::Indicators::SMC_Structures->new(
+            prefix => 'i',
+            mode   => 'internal',
+        ),
+
         smc_internal_engine => Market::Indicators::SMC_Structures->new(
             prefix => 'i',
             mode   => 'internal',
+            internal_confluence => 0
         ),
 
         smc_overlay => Market::Overlays::SMC_Structures->new(
@@ -124,8 +165,13 @@ sub new {
         smc_cache_key     => undef,
         last_liq_result   => undef,
         last_smc_result   => undef,
-        last_smc_external => undef,
-        last_smc_internal => undef,
+        last_smc_external        => undef,
+
+        # ZigZag interno MTF visible.
+        last_smc_internal_visual => undef,
+
+        # Eventos internos iBOS/iCHoCH del timeframe activo.
+        last_smc_internal        => undef,
 
         replay_mode      => 0,
         replay_selecting => 0,
@@ -165,8 +211,7 @@ sub run {
         ['W',   'W'],
     );
 
-    internal_zigzag_tf_label => '1 hora',
-    internal_zigzag_tf       => 60,
+    
 
     my $selected_tf_label = '1m';
 
@@ -372,55 +417,55 @@ sub run {
     $top->Button(
     -text    => 'Replay',
     -command => sub { $self->replay_select_start(); }
-)->pack(-side => 'left');
+    )->pack(-side => 'left');
 
-$top->Button(
-    -text    => 'Play',
-    -command => sub { $self->replay_play(); }
-)->pack(-side => 'left');
+    $top->Button(
+        -text    => 'Play',
+        -command => sub { $self->replay_play(); }
+    )->pack(-side => 'left');
 
-$top->Button(
-    -text    => 'Pause',
-    -command => sub { $self->replay_pause(); }
-)->pack(-side => 'left');
+    $top->Button(
+        -text    => 'Pause',
+        -command => sub { $self->replay_pause(); }
+    )->pack(-side => 'left');
 
-$top->Button(
-    -text    => 'Step +',
-    -command => sub { $self->replay_step(1); }
-)->pack(-side => 'left');
+    $top->Button(
+        -text    => 'Step +',
+        -command => sub { $self->replay_step(1); }
+    )->pack(-side => 'left');
 
-$top->Button(
-    -text    => 'Step -',
-    -command => sub { $self->replay_step(-1); }
-)->pack(-side => 'left');
+    $top->Button(
+        -text    => 'Step -',
+        -command => sub { $self->replay_step(-1); }
+    )->pack(-side => 'left');
 
-$top->Button(
-    -text    => 'Exit Replay',
-    -command => sub { $self->replay_exit(); }
-)->pack(-side => 'left');
-
-
-
-$top->Button(
-    -text    => 'VOL',
-    -command => sub {
-        $self->{show_volume_pivots} = !$self->{show_volume_pivots};
-        $self->draw();
-    }
-)->pack(-side => 'left');
+    $top->Button(
+        -text    => 'Exit Replay',
+        -command => sub { $self->replay_exit(); }
+    )->pack(-side => 'left');
 
 
-$top->Checkbutton(
-    -text     => 'FVG',
-    -variable => \$self->{show_fvg},
-    -command  => sub { $self->draw(); }
-)->pack(-side => 'left');
 
-$top->Checkbutton(
-    -text     => 'Order Blocks',
-    -variable => \$self->{show_order_blocks},
-    -command  => sub { $self->draw(); }
-)->pack(-side => 'left');
+    $top->Button(
+        -text    => 'VOL',
+        -command => sub {
+            $self->{show_volume_pivots} = !$self->{show_volume_pivots};
+            $self->draw();
+        }
+    )->pack(-side => 'left');
+
+
+    $top->Checkbutton(
+        -text     => 'FVG',
+        -variable => \$self->{show_fvg},
+        -command  => sub { $self->draw(); }
+    )->pack(-side => 'left');
+
+    $top->Checkbutton(
+        -text     => 'Order Blocks',
+        -variable => \$self->{show_order_blocks},
+        -command  => sub { $self->draw(); }
+    )->pack(-side => 'left');
 
 
 
@@ -518,9 +563,6 @@ $top->Checkbutton(
 }
 
 
-
-
-
 sub set_timeframe {
     my ($self, $tf) = @_;
     $self->{tf} = $tf;
@@ -529,7 +571,7 @@ sub set_timeframe {
     my $last = $self->{market}->last_index();
     $self->{replay_index} = $last if $self->{replay_index} > $last;
     $self->_replay_apply_window();
-}
+    }
     $self->{smc_cache_key} = undef;
     $self->{indicators}->reset_all();
     $self->{indicators}->update_last($self->{market});
@@ -619,7 +661,15 @@ sub update_smc_overlay {
         $self->{internal_zigzag_tf} // 60;
 
     $self->{liquidity_engine}->{internal_zigzag_prd} =
-        $self->{internal_zigzag_prd} // 2;
+    $self->{internal_zigzag_prd} // 2;
+
+    # Siempre permanece en 5 para imitar la estructura interna
+    # del indicador sobre la temporalidad activa.
+    $self->{liquidity_engine}->{internal_smc_len} =
+        $self->{internal_smc_len} // 5;
+
+    $self->{liquidity_engine}->{equal_smc_len} =
+    $self->{equal_smc_len} // 3;
 
     $self->{liquidity_engine}->{external_swing_len} =
         $self->{external_swing_len} // 150;
@@ -628,8 +678,17 @@ sub update_smc_overlay {
         ':',
         $tf,
         $until_index,
+
+        # ZigZag interno visual.
         $self->{internal_zigzag_tf} // 60,
         $self->{internal_zigzag_prd} // 2,
+
+        # Estructura SMC interna.
+        $self->{internal_smc_len} // 5,
+        $self->{equal_smc_len} // 3,
+        $self->{liquidity_engine}->{eq_tolerance} // 0.10,
+
+        # Estructura externa.
         $self->{external_swing_len} // 150,
     );
 
@@ -646,19 +705,54 @@ sub update_smc_overlay {
         $until_index
     );
 
-    my $smc_external = $self->{smc_external_engine}->calculate(
-    $liq_result->{external_structure},
-    $market
+        my $smc_external = $self->{smc_external_engine}->calculate(
+        $liq_result->{external_structure},
+        $market,
+        until_index => $until_index,
     );
+    # Resultado exclusivamente visual del ZigZag interno MTF.
+    my $smc_internal_visual =
+        $self->{smc_internal_visual_engine}->calculate(
+            $liq_result->{internal_structure},
+            $market,
+            until_index => $until_index,
+        );
+
+    # Preparamos los niveles swing externos para replicar:
+    #
+    # internalHigh.currentLevel != swingHigh.currentLevel
+    # internalLow.currentLevel  != swingLow.currentLevel
+    #
+    # del indicador TradingView.
+    my %external_highs;
+    my %external_lows;
+
+    for my $pivot (@{$liq_result->{external_structure} || []}) {
+        next if !$pivot;
+        next if !defined $pivot->{price};
+        next if !defined $pivot->{type};
+
+        if ($pivot->{type} eq 'HIGH') {
+            $external_highs{$pivot->{price}} = 1;
+        }
+        elsif ($pivot->{type} eq 'LOW') {
+            $external_lows{$pivot->{price}} = 1;
+        }
+    }
 
     my $smc_internal = $self->{smc_internal_engine}->calculate(
-    $liq_result->{internal_structure},
-    $market
+    $liq_result->{internal_smc_structure},
+    $market,
+
+    until_index    => $until_index,
+    external_highs => \%external_highs,
+    external_lows  => \%external_lows,  
     );
 
-    $self->{last_liq_result}   = $liq_result;
-    $self->{last_smc_external} = $smc_external;
-    $self->{last_smc_internal} = $smc_internal;
+    $self->{last_liq_result}          = $liq_result;
+    $self->{last_smc_external}        = $smc_external;
+    $self->{last_smc_internal_visual} = $smc_internal_visual;
+    $self->{last_smc_internal}        = $smc_internal;
     $self->_print_audit_summary($liq_result, $smc_external, $smc_internal, $market);
 
     # Se mantiene por compatibilidad con auditoría y ML.
@@ -734,32 +828,32 @@ sub draw {
     $self->{price_min} = $state{price_min};
     $self->{price_max} = $state{price_max};
 
-my $plot_top    = $state{top};
-my $plot_bottom = $state{price_h};
+    my $plot_top    = $state{top};
+    my $plot_bottom = $state{price_h};
 
-my $y_of = sub {
-    my ($price) = @_;
+    my $y_of = sub {
+        my ($price) = @_;
 
-    return $plot_bottom if $state{price_max} == $state{price_min};
+        return $plot_bottom if $state{price_max} == $state{price_min};
 
-    return $plot_bottom
-        - (($price - $state{price_min}) / ($state{price_max} - $state{price_min}))
-        * ($plot_bottom - $plot_top);
-};
+        return $plot_bottom
+            - (($price - $state{price_min}) / ($state{price_max} - $state{price_min}))
+            * ($plot_bottom - $plot_top);
+    };
 
-$state{y_of} = $y_of;
+    $state{y_of} = $y_of;
 
     
     #use Data::Dump qw(dump);
 
-#print dump(\%state);
+    #print dump(\%state);
     
 
     my $calc_until = $self->{replay_mode}
     ? $self->{replay_index}
     : $self->{market}->last_index();
 
-my $needs_smc_or_liquidity =
+    my $needs_smc_or_liquidity =
        $self->{show_external_zigzag}
     || $self->{show_external_labels}
     || $self->{show_internal_zigzag}
@@ -774,7 +868,7 @@ my $needs_smc_or_liquidity =
     || $self->{show_eql}
     || $self->{show_volume_pivots};
 
-$self->update_smc_overlay($calc_until) if $needs_smc_or_liquidity;
+    $self->update_smc_overlay($calc_until) if $needs_smc_or_liquidity;
 
     if ($self->{show_external_zigzag} || $self->{show_external_labels}) {
     $self->{smc_overlay}->draw(
@@ -799,7 +893,7 @@ $self->update_smc_overlay($calc_until) if $needs_smc_or_liquidity;
             $x_of,
             \%state,
             $self->{price_panel},
-            result      => $self->{last_smc_internal},
+            result => $self->{last_smc_internal_visual},
             style       => 'internal',
             show_zigzag => $self->{show_internal_zigzag},
             show_labels => $self->{show_internal_labels},
@@ -849,18 +943,24 @@ $self->update_smc_overlay($calc_until) if $needs_smc_or_liquidity;
     }
 
     if ($self->{show_fvg}) {
-    $self->{smc_overlay}->draw_fvg(
-        $c,
-        $start,
-        $end,
-        $x_of,
-        \%state,
-        $self->{price_panel},
-        $self->{last_smc_external}->{fvg} || [],
-    );
-}
+        $self->{smc_overlay}->draw_fvg(
+            $c,
+            $start,
+            $end,
+            $x_of,
+            \%state,
+            $self->{price_panel},
+            $self->{last_smc_external}->{fvg} || [],
 
-if ($self->{show_order_blocks}) {
+            # Fuera de Replay: últimos 3 FVG detectados.
+            history_limit => 3,
+
+            # En Replay: únicamente los FVG activos en ese punto.
+            replay_mode => $self->{replay_mode} ? 1 : 0,
+        );
+    }
+
+    if ($self->{show_order_blocks}) {
     $self->{smc_overlay}->draw_order_blocks(
         $c,
         $start,
@@ -870,16 +970,39 @@ if ($self->{show_order_blocks}) {
         $self->{price_panel},
         $self->{last_smc_external}->{order_blocks} || [],
     );
-}
+    }
 
-    if ($self->{show_bsl} || $self->{show_ssl} || $self->{show_eqh} || $self->{show_eql} || $self->{show_liquidity_events}) {
-        $self->{liquidity_overlay}->{show_ssl} = $self->{show_ssl};
-        $self->{liquidity_overlay}->{show_eqh} = $self->{show_eqh};
-        $self->{liquidity_overlay}->{show_eql} = $self->{show_eql};
-        $self->{liquidity_overlay}->{show_liquidity_events} = $self->{show_liquidity_events};
+    if (
+        $self->{show_bsl}
+        || $self->{show_ssl}
+        || $self->{show_eqh}
+        || $self->{show_eql}
+        || $self->{show_liquidity_events}
+    ) {
+        # Es indispensable enviar SIEMPRE todos los flags.
+        # Así el overlay no conserva valores de una selección anterior.
+        $self->{liquidity_overlay}->{show_bsl} =
+            $self->{show_bsl} ? 1 : 0;
+
+        $self->{liquidity_overlay}->{show_ssl} =
+            $self->{show_ssl} ? 1 : 0;
+
+        $self->{liquidity_overlay}->{show_eqh} =
+            $self->{show_eqh} ? 1 : 0;
+
+        $self->{liquidity_overlay}->{show_eql} =
+            $self->{show_eql} ? 1 : 0;
+
+        $self->{liquidity_overlay}->{show_liquidity_events} =
+            $self->{show_liquidity_events} ? 1 : 0;
 
         $self->{liquidity_overlay}->draw(
-            $c, $start, $end, $x_of, \%state, $self->{price_panel}
+            $c,
+            $start,
+            $end,
+            $x_of,
+            \%state,
+            $self->{price_panel},
         );
     }
 
@@ -898,9 +1021,9 @@ if ($self->{show_order_blocks}) {
         -outline => 'white'
     );
 
-$c->createLine($self->{left}, $atr_top, $right, $atr_top, -fill => '#cccccc', -width => 2);
+    $c->createLine($self->{left}, $atr_top, $right, $atr_top, -fill => '#cccccc', -width => 2);
 
-$self->{atr_panel}->draw($c, $atr, $x_of, \%state);
+    $self->{atr_panel}->draw($c, $atr, $x_of, \%state);
 
 
     $self->{atr_min} = $state{atr_min};
@@ -908,8 +1031,6 @@ $self->{atr_panel}->draw($c, $atr, $x_of, \%state);
 
     $self->draw_crosshair($start, $end, $x_of, $right, $h, \%state)if defined $self->{mouse_x};
 }
-
-
 
 
 sub draw_time_axis {
@@ -946,7 +1067,7 @@ sub draw_time_axis {
     }
 
     return;
-}
+    }
 
     my $min_gap  = 80;
     my $hour_gap = 70;
@@ -1111,8 +1232,8 @@ sub draw_crosshair {
     if ($candle) {
         $x = $x_of->($local_i);
     }
-# Snap vertical a O/H/L/C solo si el mouse está cerca de esos precios.
-if ($candle && $y < $state->{atr_top}) {
+    # Snap vertical a O/H/L/C solo si el mouse está cerca de esos precios.
+    if ($candle && $y < $state->{atr_top}) {
 
     my @levels = (
         $candle->{open},
@@ -1146,7 +1267,7 @@ if ($candle && $y < $state->{atr_top}) {
     if ($best_dist <= 8) {
         $y = $best_y;
     }
-}
+    }
 
 
 
@@ -1169,10 +1290,10 @@ if ($candle && $y < $state->{atr_top}) {
     $self->{price_max},
     0,
     $state->{price_h}
-);
+    );
 
-$price = _round_to_tick($price, 0.25);
-$label = sprintf("%.2f", $price);
+    $price = _round_to_tick($price, 0.25);
+    $label = sprintf("%.2f", $price);
     } else {
         $label = sprintf("%.2f", $self->{atr_panel}->{scale}->y_to_price(
             $y,
@@ -1218,7 +1339,7 @@ $label = sprintf("%.2f", $price);
 
 
     # Mostrar OHLC de la vela actual del crosshair
-if ($candle) {
+    if ($candle) {
     my $ohlc = sprintf(
         "O %.2f   H %.2f   L %.2f   C %.2f",
         $candle->{open},
@@ -1237,7 +1358,7 @@ if ($candle) {
         -fill => $color,
         -font => ['Arial', 10, 'bold']
     );
-}
+    }
 }
 
 sub mouse_move {
@@ -1372,7 +1493,7 @@ sub mouse_drag {
     ? $self->{replay_index}
     : $self->{market}->last_index();
 
-my $n = $effective_last + 1;
+    my $n = $effective_last + 1;
         $new_visible = 2  if $new_visible < 2;
         $new_visible = $n if $new_visible > $n;
 
@@ -1437,7 +1558,7 @@ my $n = $effective_last + 1;
 
     $self->draw();
     return;
-}
+    }
 
 
     if ($self->{resize_atr}) {
@@ -1792,7 +1913,7 @@ sub audit_replay_state {
     print "\n=== REPLAY AUDIT ===\n";
     print "Replay index: $idx\n";
     print "Timeframe: " . ($self->{market}->{timeframe} // '?') . "\n";
-print "Last index: " . $self->{market}->last_index() . "\n";
+    print "Last index: " . $self->{market}->last_index() . "\n";
 
     print "Structural pivots: "
         . scalar(@{$liq->{structural_pivots} || []}) . "\n";
@@ -2361,7 +2482,7 @@ sub _build_layer_group {
         ['eql',              'EQL'],
         ['liquidity_events', 'Sweep / Grab / Run'],
         ['fvg',              'FVG'],
-['order_blocks',     'Order Blocks'],
+    ['order_blocks',     'Order Blocks'],
     );
 
     for my $item (@items) {
@@ -2556,7 +2677,7 @@ sub _build_layers_panel {
     $panel->Button(
         -text => 'Ocultar todo',
         -command => sub {
-            for my $scope (qw(internal external)) {
+            for my $scope (qw(internal external equal)) {
                 for my $key (keys %{$self->{layers}{$scope}}) {
                     $self->{layers}{$scope}{$key} = 0;
                 }
@@ -2590,42 +2711,71 @@ sub _build_layers_panel {
 sub _sync_layer_flags {
     my ($self) = @_;
 
-    $self->{show_external_zigzag} = $self->{layers}{external}{zigzag};
-    $self->{show_internal_zigzag} = $self->{layers}{internal}{zigzag};
+    # ==========================================================
+    # ESTRUCTURA INTERNA
+    # ==========================================================
+    $self->{show_internal_zigzag} =
+        $self->{layers}{internal}{zigzag} // 0;
 
-    $self->{show_external_labels} = $self->{layers}{external}{labels};
-    $self->{show_internal_labels} = $self->{layers}{internal}{labels};
+    $self->{show_internal_labels} =
+        $self->{layers}{internal}{labels} // 0;
 
+    # ==========================================================
+    # ESTRUCTURA EXTERNA
+    # ==========================================================
+    $self->{show_external_zigzag} =
+        $self->{layers}{external}{zigzag} // 0;
+
+    $self->{show_external_labels} =
+        $self->{layers}{external}{labels} // 0;
+
+    # ==========================================================
+    # BOS / CHoCH
+    # ==========================================================
     $self->{show_bos} =
-        $self->{layers}{external}{bos} || $self->{layers}{internal}{bos};
+           ($self->{layers}{external}{bos} // 0)
+        || ($self->{layers}{internal}{bos} // 0);
 
     $self->{show_choch} =
-        $self->{layers}{external}{choch} || $self->{layers}{internal}{choch};
+           ($self->{layers}{external}{choch} // 0)
+        || ($self->{layers}{internal}{choch} // 0);
 
+    # ==========================================================
+    # LIQUIDEZ EXTERNA
+    # BSL / SSL / Sweep / Grab / Run
+    # ==========================================================
     $self->{show_bsl} =
-        $self->{layers}{external}{bsl} || $self->{layers}{internal}{bsl};
+        $self->{layers}{external}{bsl} // 0;
 
     $self->{show_ssl} =
-        $self->{layers}{external}{ssl} || $self->{layers}{internal}{ssl};
-
-    $self->{show_eqh} =
-        $self->{layers}{external}{eqh} || $self->{layers}{internal}{eqh};
-
-    $self->{show_eql} =
-        $self->{layers}{external}{eql} || $self->{layers}{internal}{eql};
+        $self->{layers}{external}{ssl} // 0;
 
     $self->{show_liquidity_events} =
-        $self->{layers}{external}{liquidity_events}
-        || $self->{layers}{internal}{liquidity_events};
-        $self->{show_fvg} =
-    $self->{layers}{external}{fvg}
-    || $self->{layers}{internal}{fvg};
+        $self->{layers}{external}{liquidity_events} // 0;
 
-$self->{show_order_blocks} =
-    $self->{layers}{external}{order_blocks}
-    || $self->{layers}{internal}{order_blocks};
-        
+    # ==========================================================
+    # EQH / EQL
+    # Capa independiente
+    # ==========================================================
+    $self->{show_eqh} =
+        $self->{layers}{equal}{eqh} // 0;
+
+    $self->{show_eql} =
+        $self->{layers}{equal}{eql} // 0;
+
+    # ==========================================================
+    # FVG / ORDER BLOCKS
+    # ==========================================================
+    $self->{show_fvg} =
+           ($self->{layers}{external}{fvg} // 0)
+        || ($self->{layers}{internal}{fvg} // 0);
+
+    $self->{show_order_blocks} =
+           ($self->{layers}{external}{order_blocks} // 0)
+        || ($self->{layers}{internal}{order_blocks} // 0);
 }
+
+
 
 sub _build_layers_popup {
     my ($self) = @_;
@@ -2636,58 +2786,73 @@ sub _build_layers_popup {
         -relief      => 'solid',
         -borderwidth => 1,
         -background  => '#f5f5f5',
-    )->pack(-fill => 'both', -expand => 1);
+    )->pack(
+        -fill   => 'both',
+        -expand => 1,
+    );
 
+    # ==========================================================
+    # TÍTULO
+    # ==========================================================
     $frame->Label(
         -text       => 'SMC Layers',
         -font       => ['Arial', 10, 'bold'],
         -background => '#f5f5f5',
     )->grid(
-        -row => 0,
-        -column => 0,
-        -padx => 8,
-        -pady => 5,
-        -sticky => 'w',
+        -row        => 0,
+        -column     => 0,
+        -columnspan => 3,
+        -padx       => 8,
+        -pady       => 6,
     );
 
+    # ==========================================================
+    # ENCABEZADOS
+    # ==========================================================
     $frame->Label(
         -text       => 'Internal',
         -font       => ['Arial', 9, 'bold'],
         -background => '#f5f5f5',
-    )->grid(-row => 0, -column => 1, -padx => 10);
+    )->grid(
+        -row    => 1,
+        -column => 1,
+        -padx   => 10,
+    );
 
     $frame->Label(
         -text       => 'External',
         -font       => ['Arial', 9, 'bold'],
         -background => '#f5f5f5',
-    )->grid(-row => 0, -column => 2, -padx => 10);
-
-    my @rows = (
-        ['zigzag',           'ZigZag'],
-        ['labels',           'HH HL LH LL'],
-        ['bos',              'BOS'],
-        ['choch',            'CHoCH'],
-        ['bsl',              'BSL'],
-        ['ssl',              'SSL'],
-        ['eqh',              'EQH'],
-        ['eql',              'EQL'],
-        ['liquidity_events', 'Sweep / Grab / Run'],
+    )->grid(
+        -row    => 1,
+        -column => 2,
+        -padx   => 10,
     );
 
-    my $r = 1;
+    my @structure_rows = (
+        ['zigzag', 'ZigZag'],
+        ['labels', 'HH HL LH LL'],
+        ['bos',    'BOS'],
+        ['choch',  'CHoCH'],
+    );
 
-    for my $item (@rows) {
+    my $row = 2;
+
+    # ==========================================================
+    # ESTRUCTURA INTERNA / EXTERNA
+    # ==========================================================
+    for my $item (@structure_rows) {
         my ($key, $label) = @$item;
 
         $frame->Label(
             -text       => $label,
             -background => '#f5f5f5',
         )->grid(
-            -row => $r,
+            -row    => $row,
             -column => 0,
             -sticky => 'w',
-            -padx => 8,
-            -pady => 2,
+            -padx   => 8,
+            -pady   => 2,
         );
 
         $frame->Checkbutton(
@@ -2697,7 +2862,10 @@ sub _build_layers_popup {
                 $self->_sync_layer_flags();
                 $self->draw();
             },
-        )->grid(-row => $r, -column => 1);
+        )->grid(
+            -row    => $row,
+            -column => 1,
+        );
 
         $frame->Checkbutton(
             -variable   => \$self->{layers}{external}{$key},
@@ -2706,15 +2874,126 @@ sub _build_layers_popup {
                 $self->_sync_layer_flags();
                 $self->draw();
             },
-        )->grid(-row => $r, -column => 2);
+        )->grid(
+            -row    => $row,
+            -column => 2,
+        );
 
-        $r++;
+        $row++;
     }
 
+    # ==========================================================
+    # LIQUIDEZ EXTERNA
+    # ==========================================================
+    $frame->Label(
+        -text       => 'External Liquidity',
+        -font       => ['Arial', 9, 'bold'],
+        -background => '#f5f5f5',
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -padx       => 8,
+        -pady       => [8, 4],
+    );
+
+    $row++;
+
+    my @external_liquidity_rows = (
+        ['bsl',              'BSL'],
+        ['ssl',              'SSL'],
+        ['liquidity_events', 'Sweep / Grab / Run'],
+    );
+
+    for my $item (@external_liquidity_rows) {
+        my ($key, $label) = @$item;
+
+        $frame->Checkbutton(
+            -text       => $label,
+            -variable   => \$self->{layers}{external}{$key},
+            -background => '#f5f5f5',
+            -command    => sub {
+                $self->_sync_layer_flags();
+                $self->draw();
+            },
+        )->grid(
+            -row        => $row,
+            -column     => 0,
+            -columnspan => 3,
+            -sticky     => 'w',
+            -padx       => 20,
+            -pady       => 2,
+        );
+
+        $row++;
+    }
+
+    # ==========================================================
+    # EQH / EQL INDEPENDIENTES
+    # ==========================================================
+    $frame->Label(
+        -text       => 'Equal Highs / Lows',
+        -font       => ['Arial', 9, 'bold'],
+        -background => '#f5f5f5',
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -padx       => 8,
+        -pady       => [8, 4],
+    );
+
+    $row++;
+
+    my $equal_frame = $frame->Frame(
+        -background => '#f5f5f5',
+    );
+
+    $equal_frame->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -pady       => 2,
+    );
+
+    $equal_frame->Checkbutton(
+        -text       => 'EQH',
+        -variable   => \$self->{layers}{equal}{eqh},
+        -background => '#f5f5f5',
+        -command    => sub {
+            $self->_sync_layer_flags();
+            $self->draw();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 8,
+    );
+
+    $equal_frame->Checkbutton(
+        -text       => 'EQL',
+        -variable   => \$self->{layers}{equal}{eql},
+        -background => '#f5f5f5',
+        -command    => sub {
+            $self->_sync_layer_flags();
+            $self->draw();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 8,
+    );
+
+    $row++;
+
+    # ==========================================================
+    # BOTÓN OCULTAR TODO
+    # ==========================================================
     $frame->Button(
         -text    => 'Ocultar todo',
         -command => sub {
-            for my $scope (qw(internal external)) {
+
+            for my $scope (qw(internal external equal)) {
+                next if !$self->{layers}{$scope};
+
                 for my $key (keys %{$self->{layers}{$scope}}) {
                     $self->{layers}{$scope}{$key} = 0;
                 }
@@ -2724,12 +3003,12 @@ sub _build_layers_popup {
             $self->draw();
         },
     )->grid(
-        -row => $r,
-        -column => 0,
+        -row        => $row,
+        -column     => 0,
         -columnspan => 3,
-        -sticky => 'we',
-        -padx => 8,
-        -pady => [8, 3],
+        -sticky     => 'we',
+        -padx       => 8,
+        -pady       => [10, 5],
     );
 }
 

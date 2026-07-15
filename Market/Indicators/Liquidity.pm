@@ -11,6 +11,13 @@ sub new {
         minor_atr_mult   => $args{minor_atr_mult}   // 1.5,
         internal_zigzag_tf  => $args{internal_zigzag_tf}  // 60,
         internal_zigzag_prd => $args{internal_zigzag_prd} // 2,
+
+        # Sensibilidad de la estructura SMC interna.
+        # En el indicador TradingView se utiliza getCurrentStructure(5, ..., true).
+        internal_smc_len    => $args{internal_smc_len}    // 5,
+        # LuxAlgo usa 3 barras para confirmar EQH/EQL.
+        equal_smc_len => $args{equal_smc_len} // 3,
+
         external_swing_len  => $args{external_swing_len}  // 150,
         volume_lookback      => $args{volume_lookback}      // 20,
         volume_mult          => $args{volume_mult}          // 2.8,
@@ -44,9 +51,22 @@ sub new {
         clean_volume_swings => [],
 
         structural_pivots_clean => [],
+        
+        # ZigZag interno MTF configurable.
         internal_structure      => [],
+
+        # Pivotes internos SMC del timeframe activo.
+        # Se utilizan exclusivamente para iBOS/iCHoCH.
+        internal_smc_structure  => [],
+
+        # Pivotes independientes para detectar Equal Highs y Equal Lows.
+        equal_structure => [],
+
+        # Estructura swing externa.
         external_structure      => [],
+
         internal_fibonacci      => [],
+
 
 
         audit => {pivots => [],},
@@ -80,13 +100,15 @@ sub reset {
     $self->{clean_volume_swings} = [];
     $self->{structural_pivots_clean} = [];
     $self->{internal_structure}      = [];
+    $self->{internal_smc_structure}  = [];
+    $self->{equal_structure} = [];
     $self->{external_structure}      = [];
     $self->{internal_fibonacci}      = [];
 
     $self->{structural_pivots_clean} = [];
     $self->{audit}->{pivots} = [];
     $self->{audit}->{liquidity_classification} = {};
-    }
+}
 
 sub calculate_until {
     my ($self, $candles, $atr_values, $until_index) = @_;
@@ -96,6 +118,17 @@ sub calculate_until {
     $until_index = $#$candles if !defined $until_index || $until_index > $#$candles;
     return {} if $until_index < 0;
 
+    # ==============================================================
+    # 1. ZIGZAG INTERNO MTF
+    #
+    # Continúa dependiendo del selector:
+    # "ZZ Interno: 1 hora", 15 minutos, 4 horas, etc.
+    #
+    # Se utiliza para:
+    # - dibujar el ZigZag interno;
+    # - etiquetas internas HH/HL/LH/LL;
+    # - Fibonacci interno.
+    # ==============================================================
     $self->{internal_structure} = $self->_build_internal_zigzag_zzmtf(
         $candles,
         $until_index,
@@ -104,9 +137,46 @@ sub calculate_until {
     );
 
     $self->{internal_fibonacci} = $self->_build_internal_fibonacci_zzmtf(
-    $self->{internal_structure}
-);
+        $self->{internal_structure}
+    );
 
+    # ==============================================================
+    # 2. ESTRUCTURA SMC INTERNA DEL TIMEFRAME ACTIVO
+    #
+    # No depende del selector del ZigZag interno.
+    # Se calcula directamente sobre las velas actuales del gráfico.
+    #
+    # Se utiliza exclusivamente para:
+    # - iBOS;
+    # - iCHoCH;
+    # - tendencia interna;
+    # - posteriormente Order Blocks internos.
+    # ==============================================================
+    $self->{internal_smc_structure}
+        = $self->_build_internal_smc_structure_luxalgo(
+            $candles,
+            $until_index,
+            $self->{internal_smc_len},
+        );
+    # ==============================================================
+    # 3. ESTRUCTURA INDEPENDIENTE PARA EQH / EQL
+    #
+    # LuxAlgo utiliza Confirmation Bars = 3.
+    # Se calcula sobre la temporalidad activa del gráfico.
+    # No depende del ZigZag interno MTF.
+    # ==============================================================
+    $self->{equal_structure}
+        = $self->_build_equal_structure_luxalgo(
+            $candles,
+            $until_index,
+            $self->{equal_smc_len},
+        );
+
+    # ==============================================================
+    # 3. ESTRUCTURA SWING EXTERNA
+    #
+    # Se mantiene exactamente como está.
+    # ==============================================================
     $self->{external_structure} = $self->_build_external_zigzag_chartprime(
         $candles,
         $until_index,
@@ -125,13 +195,20 @@ sub calculate_until {
         $self->_update_liquidity_states($bar, $i);
     }
 
-    $self->_detect_equal_levels();
+    $self->_detect_equal_levels($atr_values);
 
     return {
         pivots              => $self->{pivots},
         structural_pivots   => $self->{external_structure},
+
         external_structure  => $self->{external_structure},
+
+        # ZigZag interno MTF visible.
         internal_structure  => $self->{internal_structure},
+
+        # Estructura interna del timeframe activo para iBOS/iCHoCH.
+        internal_smc_structure => $self->{internal_smc_structure},
+        equal_structure => $self->{equal_structure},
 
         raw_structural_pivots => $self->{pivots},
         raw_minor_pivots      => $self->{minor_pivots},
@@ -240,6 +317,248 @@ sub _zz_add_or_update {
 
     push @$zz, $pivot;
 }
+
+sub _build_internal_smc_structure_luxalgo {
+    my ($self, $candles, $until_index, $size) = @_;
+
+    $size //= 5;
+
+    my @pivots;
+
+    return \@pivots if !$candles;
+    return \@pivots if ref($candles) ne 'ARRAY';
+    return \@pivots if $until_index < $size;
+    return \@pivots if $size < 1;
+
+    # En el indicador:
+    #
+    # 0 = bearish leg
+    # 1 = bullish leg
+    #
+    # Empieza en 0 de la misma forma que:
+    # var int legState = 0
+    my $leg_state = 0;
+
+    for my $i ($size .. $until_index) {
+
+        # La vela candidata está "size" posiciones atrás.
+        #
+        # Para size=5 y vela actual i=100:
+        # candidato = 95
+        #
+        # Esto replica:
+        # high[size]
+        # low[size]
+        my $candidate_i = $i - $size;
+        my $candidate   = $candles->[$candidate_i];
+
+        next if !$candidate;
+        next if !defined $candidate->{high};
+        next if !defined $candidate->{low};
+
+        # El indicador compara la vela candidata contra las
+        # siguientes "size" velas ya conocidas:
+        #
+        # high[size] > ta.highest(size)
+        # low[size]  < ta.lowest(size)
+        #
+        # En el momento i todas estas velas ya existen.
+        my $comparison_from = $candidate_i + 1;
+        my $comparison_to   = $i;
+
+        my $highest_after;
+        my $lowest_after;
+
+        for my $j ($comparison_from .. $comparison_to) {
+
+            my $bar = $candles->[$j];
+            next if !$bar;
+
+            if (defined $bar->{high}) {
+                $highest_after = $bar->{high}
+                    if !defined $highest_after
+                    || $bar->{high} > $highest_after;
+            }
+
+            if (defined $bar->{low}) {
+                $lowest_after = $bar->{low}
+                    if !defined $lowest_after
+                    || $bar->{low} < $lowest_after;
+            }
+        }
+
+        next if !defined $highest_after;
+        next if !defined $lowest_after;
+
+        my $new_high = $candidate->{high} > $highest_after
+            ? 1
+            : 0;
+
+        my $new_low = $candidate->{low} < $lowest_after
+            ? 1
+            : 0;
+
+        my $previous_leg = $leg_state;
+
+        # Equivalente a la prioridad del Pine Script:
+        #
+        # if newHigh
+        #     legState := BEARISH_LEG
+        # else if newLow
+        #     legState := BULLISH_LEG
+        if ($new_high) {
+            $leg_state = 0;
+        }
+        elsif ($new_low) {
+            $leg_state = 1;
+        }
+
+        # Solo existe un nuevo pivote cuando cambia la pierna.
+        next if $leg_state == $previous_leg;
+
+        my ($type, $price);
+
+        if ($leg_state == 1) {
+            # Inicio de pierna alcista:
+            # el punto confirmado es un LOW.
+            $type  = 'LOW';
+            $price = $candidate->{low};
+        }
+        else {
+            # Inicio de pierna bajista:
+            # el punto confirmado es un HIGH.
+            $type  = 'HIGH';
+            $price = $candidate->{high};
+        }
+
+        push @pivots, {
+            type  => $type,
+            price => $price,
+
+            # IMPORTANTE:
+            #
+            # index es el instante de confirmación.
+            # El nivel no puede estar activo antes de esta vela.
+            #
+            # Esto mantiene Replay causal y evita utilizar
+            # información futura.
+            index => $i,
+
+            # display_index es la vela real donde ocurrió el extremo.
+            # La línea del iBOS/iCHoCH debe comenzar aquí.
+            display_index => $candidate_i,
+
+            confirmed_index => $i,
+
+            source         => 'INTERNAL_SMC_LUXALGO',
+            tier           => 'internal',
+            structure_mode => 'internal',
+            size           => $size,
+
+            timestamp => $candidate->{time},
+        };
+    }
+
+    return \@pivots;
+}
+
+sub _build_equal_structure_luxalgo {
+    my ($self, $candles, $until_index, $size) = @_;
+
+    $size //= 3;
+
+    my @pivots;
+
+    return \@pivots if !$candles;
+    return \@pivots if ref($candles) ne 'ARRAY';
+    return \@pivots if $size < 1;
+    return \@pivots if $until_index < $size;
+
+    my $leg_state = 0;
+
+    for my $i ($size .. $until_index) {
+
+        my $candidate_i = $i - $size;
+        my $candidate   = $candles->[$candidate_i];
+
+        next if !$candidate;
+        next if !defined $candidate->{high};
+        next if !defined $candidate->{low};
+
+        my $highest_after;
+        my $lowest_after;
+
+        for my $j ($candidate_i + 1 .. $i) {
+
+            my $bar = $candles->[$j];
+            next if !$bar;
+
+            if (defined $bar->{high}) {
+                $highest_after = $bar->{high}
+                    if !defined $highest_after
+                    || $bar->{high} > $highest_after;
+            }
+
+            if (defined $bar->{low}) {
+                $lowest_after = $bar->{low}
+                    if !defined $lowest_after
+                    || $bar->{low} < $lowest_after;
+            }
+        }
+
+        next if !defined $highest_after;
+        next if !defined $lowest_after;
+
+        my $new_high =
+            $candidate->{high} > $highest_after ? 1 : 0;
+
+        my $new_low =
+            $candidate->{low} < $lowest_after ? 1 : 0;
+
+        my $previous_leg = $leg_state;
+
+        if ($new_high) {
+            $leg_state = 0;
+        }
+        elsif ($new_low) {
+            $leg_state = 1;
+        }
+
+        next if $leg_state == $previous_leg;
+
+        my ($type, $price);
+
+        if ($leg_state == 1) {
+            $type  = 'LOW';
+            $price = $candidate->{low};
+        }
+        else {
+            $type  = 'HIGH';
+            $price = $candidate->{high};
+        }
+
+        push @pivots, {
+            type            => $type,
+            price           => $price,
+
+            # Momento en que el pivote queda confirmado.
+            index           => $i,
+
+            # Lugar real del extremo.
+            display_index   => $candidate_i,
+            confirmed_index => $i,
+
+            source          => 'EQUAL_STRUCTURE_LUXALGO',
+            tier            => 'equal',
+            structure_mode  => 'equal',
+            size            => $size,
+            timestamp       => $candidate->{time},
+        };
+    }
+
+    return \@pivots;
+}
+
 
 sub _build_internal_zigzag_zzmtf {
     my ($self, $candles, $until_index, $tf, $prd) = @_;
@@ -996,163 +1315,314 @@ sub _process_structural_pivot {
 }
 
 
-
-
 sub _detect_equal_levels {
-    my ($self) = @_;
+    my ($self, $atr_values) = @_;
 
-    my @recent_highs;
-    my @recent_lows;
+    $self->{equal_levels} = [];
 
-    my $lookback_pivots = 20;
+    my $pivots = $self->{equal_structure} || [];
 
-    for my $p (@{$self->{minor_pivots}}) {
+    return if ref($pivots) ne 'ARRAY';
+    return if !@$pivots;
 
-        my $atr = $p->{atr} // 0;
-        next if $atr <= 0;
+    my $last_equal_high;
+    my $last_equal_low;
 
-        my $tolerance = $atr * $self->{eq_tolerance};
+    for my $pivot (@$pivots) {
 
-        if ($p->{type} eq 'HIGH') {
+        next if !$pivot;
+        next if !defined $pivot->{type};
+        next if !defined $pivot->{price};
+        next if !defined $pivot->{index};
 
-            for my $prev (@recent_highs) {
-                my $diff = abs($p->{price} - $prev->{price});
+        my $atr = 0;
 
-                if ($diff <= $tolerance) {
-                    push @{$self->{equal_levels}}, {
-                        type       => 'EQH',
-                        state      => 'Detected',
-                        index1     => $prev->{index},
-                        index2     => $p->{index},
-                        price1     => $prev->{price},
-                        price2     => $p->{price},
-                        price      => ($prev->{price} + $p->{price}) / 2,
-                        tolerance  => $tolerance,
-                        source     => 'MinorPivotHigh',
-                    };
-                    last;
-                }
-            }
-
-            push @recent_highs, $p;
-            shift @recent_highs while @recent_highs > $lookback_pivots;
+        if (
+            $atr_values
+            && ref($atr_values) eq 'ARRAY'
+            && defined $atr_values->[$pivot->{index}]
+        ) {
+            $atr = $atr_values->[$pivot->{index}];
         }
 
-        elsif ($p->{type} eq 'LOW') {
+        next if !defined $atr || $atr <= 0;
 
-            for my $prev (@recent_lows) {
-                my $diff = abs($p->{price} - $prev->{price});
+        my $tolerance =
+            $atr * ($self->{eq_tolerance} // 0.10);
 
-                if ($diff <= $tolerance) {
+        if ($pivot->{type} eq 'HIGH') {
+
+            if ($last_equal_high) {
+
+                my $difference = abs(
+                    $last_equal_high->{price}
+                    - $pivot->{price}
+                );
+
+                if ($difference < $tolerance) {
+
                     push @{$self->{equal_levels}}, {
-                        type       => 'EQL',
-                        state      => 'Detected',
-                        index1     => $prev->{index},
-                        index2     => $p->{index},
-                        price1     => $prev->{price},
-                        price2     => $p->{price},
-                        price      => ($prev->{price} + $p->{price}) / 2,
-                        tolerance  => $tolerance,
-                        source     => 'MinorPivotLow',
+                        type  => 'EQH',
+                        tier  => 'equal',
+                        mode  => 'equal',
+
+                        index1 => defined $last_equal_high->{display_index}
+                            ? $last_equal_high->{display_index}
+                            : $last_equal_high->{index},
+
+                        index2 => defined $pivot->{display_index}
+                            ? $pivot->{display_index}
+                            : $pivot->{index},
+
+                        confirmed_index1 =>
+                            $last_equal_high->{index},
+
+                        confirmed_index2 =>
+                            $pivot->{index},
+
+                        price1 => $last_equal_high->{price},
+                        price2 => $pivot->{price},
+
+                        # LuxAlgo dibuja la línea sobre el nuevo nivel.
+                        price => $pivot->{price},
+
+                        tolerance => $tolerance,
+                        difference => $difference,
+
+                        source => 'EqualHighLuxAlgo',
                     };
-                    last;
                 }
             }
 
-            push @recent_lows, $p;
-            shift @recent_lows while @recent_lows > $lookback_pivots;
+            # Igual que equalHigh.currentLevel:
+            # siempre actualizar al último HIGH confirmado.
+            $last_equal_high = $pivot;
+        }
+
+        elsif ($pivot->{type} eq 'LOW') {
+
+            if ($last_equal_low) {
+
+                my $difference = abs(
+                    $last_equal_low->{price}
+                    - $pivot->{price}
+                );
+
+                if ($difference < $tolerance) {
+
+                    push @{$self->{equal_levels}}, {
+                        type  => 'EQL',
+                        tier  => 'equal',
+                        mode  => 'equal',
+
+                        index1 => defined $last_equal_low->{display_index}
+                            ? $last_equal_low->{display_index}
+                            : $last_equal_low->{index},
+
+                        index2 => defined $pivot->{display_index}
+                            ? $pivot->{display_index}
+                            : $pivot->{index},
+
+                        confirmed_index1 =>
+                            $last_equal_low->{index},
+
+                        confirmed_index2 =>
+                            $pivot->{index},
+
+                        price1 => $last_equal_low->{price},
+                        price2 => $pivot->{price},
+
+                        price => $pivot->{price},
+
+                        tolerance => $tolerance,
+                        difference => $difference,
+
+                        source => 'EqualLowLuxAlgo',
+                    };
+                }
+            }
+
+            $last_equal_low = $pivot;
         }
     }
 }
+
 
 sub _update_liquidity_states {
     my ($self, $bar, $i) = @_;
 
-    my $grab_max_bars = 3;
-    my $run_bars      = $self->{confirm_bars} // 3;
+    return if !$bar;
+    return if !defined $i;
 
-    for my $lvl (@{$self->{liquidity}}) {
-        
-        next if defined $lvl->{created_index} && $i <= $lvl->{created_index};
-        next if $lvl->{state} eq 'Resolved';
+    # Número de cierres consecutivos fuera del nivel
+    # necesarios para confirmar un Liquidity Run.
+    my $run_bars = $self->{confirm_bars} // 3;
+    $run_bars = 1 if $run_bars < 1;
 
+    for my $lvl (@{$self->{liquidity} || []}) {
+
+        next if !$lvl;
+        next if ref($lvl) ne 'HASH';
+
+        my $type  = $lvl->{type} // '';
         my $price = $lvl->{price};
+
+        next if $type ne 'BSL' && $type ne 'SSL';
         next if !defined $price;
 
-        if ($lvl->{state} eq 'Detected') {
+        my $created_index = defined $lvl->{created_index}
+            ? $lvl->{created_index}
+            : $lvl->{index};
 
-            if ($lvl->{type} eq 'BSL' && $bar->{high} > $price) {
-                $lvl->{state}         = 'Swept';
-                $lvl->{swept_index}   = $i;
-                $lvl->{outside_count} = 0;
+        next if !defined $created_index;
+
+        # El nivel todavía no puede ser barrido en la misma vela
+        # donde fue creado.
+        next if $i <= $created_index;
+
+        # Un nivel resuelto no vuelve a procesarse.
+        next if ($lvl->{state} // '') eq 'Resolved';
+
+        my $high  = $bar->{high};
+        my $low   = $bar->{low};
+        my $close = $bar->{close};
+
+        next if !defined $high;
+        next if !defined $low;
+        next if !defined $close;
+
+        # ==========================================================
+        # 1. DETECCIÓN DEL PRIMER ROMPIMIENTO DEL NIVEL
+        # ==========================================================
+        if (($lvl->{state} // '') eq 'Detected') {
+
+            my $level_broken = 0;
+
+            if ($type eq 'BSL') {
+                $level_broken = $high > $price ? 1 : 0;
             }
-            elsif ($lvl->{type} eq 'SSL' && $bar->{low} < $price) {
-                $lvl->{state}         = 'Swept';
-                $lvl->{swept_index}   = $i;
-                $lvl->{outside_count} = 0;
+            elsif ($type eq 'SSL') {
+                $level_broken = $low < $price ? 1 : 0;
             }
+
+            next if !$level_broken;
+
+            $lvl->{state}         = 'Swept';
+            $lvl->{swept_index}   = $i;
+            $lvl->{outside_count} = 0;
+
+            # ------------------------------------------------------
+            # SWEEP:
+            # Rompe con la mecha y regresa en la misma vela.
+            # ------------------------------------------------------
+            if (
+                ($type eq 'BSL' && $close < $price)
+                ||
+                ($type eq 'SSL' && $close > $price)
+            ) {
+                $lvl->{classification} = 'Sweep';
+                $lvl->{resolved_index} = $i;
+                $lvl->{state}          = 'Resolved';
+
+                next;
+            }
+
+            # Si la vela que rompe también cierra fuera,
+            # cuenta como la primera vela de aceptación.
+            if (
+                ($type eq 'BSL' && $close > $price)
+                ||
+                ($type eq 'SSL' && $close < $price)
+            ) {
+                $lvl->{state}         = 'Acceptance';
+                $lvl->{outside_count} = 1;
+
+                # Permite run_bars = 1 si alguna vez se configura así.
+                if ($lvl->{outside_count} >= $run_bars) {
+                    $lvl->{classification} = 'Run';
+                    $lvl->{resolved_index} = $i;
+                    $lvl->{state}          = 'Resolved';
+                }
+            }
+
+            next;
         }
 
-        next if $lvl->{state} eq 'Detected';
+        # ==========================================================
+        # 2. NIVEL YA BARRIDO:
+        #    CONFIRMAR GRAB O RUN
+        # ==========================================================
         next if !defined $lvl->{swept_index};
 
-        my $bars_after_sweep = $i - $lvl->{swept_index};
+        my $closed_outside = 0;
+        my $closed_inside  = 0;
 
-        if ($lvl->{type} eq 'BSL') {
+        if ($type eq 'BSL') {
 
-            if ($bar->{close} < $price) {
-                $lvl->{resolved_index} = $i;
-                $lvl->{classification} = ($bars_after_sweep == 0)
-                    ? 'Sweep'
-                    : ($bars_after_sweep <= $grab_max_bars ? 'Grab' : 'Sweep');
-                $lvl->{state} = 'Resolved';
-                next;
-            }
+            # Aceptación alcista por encima de BSL.
+            $closed_outside = $close > $price ? 1 : 0;
 
-            if ($bar->{close} > $price) {
-                $lvl->{state} = 'Acceptance';
-                $lvl->{outside_count}++;
+            # Recuperación bajista bajo BSL.
+            $closed_inside = $close < $price ? 1 : 0;
+        }
+        elsif ($type eq 'SSL') {
 
-                if ($lvl->{outside_count} >= $run_bars) {
-                    $lvl->{resolved_index} = $i;
-                    $lvl->{classification} = 'Run';
-                    $lvl->{state}          = 'Resolved';
-                    next;
-                }
-            }
-            else {
-                $lvl->{outside_count} = 0;
-            }
+            # Aceptación bajista por debajo de SSL.
+            $closed_outside = $close < $price ? 1 : 0;
+
+            # Recuperación alcista sobre SSL.
+            $closed_inside = $close > $price ? 1 : 0;
         }
 
-        elsif ($lvl->{type} eq 'SSL') {
+        # ----------------------------------------------------------
+        # GRAB:
+        # Hubo uno o más cierres fuera, pero el precio regresó
+        # antes de completar la confirmación del Run.
+        # ----------------------------------------------------------
+        if ($closed_inside) {
 
-            if ($bar->{close} > $price) {
+            $lvl->{classification} = 'Grab';
+            $lvl->{resolved_index} = $i;
+            $lvl->{state}          = 'Resolved';
+
+            next;
+        }
+
+        # ----------------------------------------------------------
+        # ACCEPTANCE:
+        # Sumar cierres consecutivos fuera del nivel.
+        # ----------------------------------------------------------
+        if ($closed_outside) {
+
+            $lvl->{state} = 'Acceptance';
+            $lvl->{outside_count} =
+                ($lvl->{outside_count} // 0) + 1;
+
+            # ------------------------------------------------------
+            # RUN:
+            # Confirmación por cierres consecutivos fuera.
+            # ------------------------------------------------------
+            if ($lvl->{outside_count} >= $run_bars) {
+
+                $lvl->{classification} = 'Run';
                 $lvl->{resolved_index} = $i;
-                $lvl->{classification} = ($bars_after_sweep == 0)
-                    ? 'Sweep'
-                    : ($bars_after_sweep <= $grab_max_bars ? 'Grab' : 'Sweep');
-                $lvl->{state} = 'Resolved';
+                $lvl->{state}          = 'Resolved';
+
                 next;
             }
-
-            if ($bar->{close} < $price) {
-                $lvl->{state} = 'Acceptance';
-                $lvl->{outside_count}++;
-
-                if ($lvl->{outside_count} >= $run_bars) {
-                    $lvl->{resolved_index} = $i;
-                    $lvl->{classification} = 'Run';
-                    $lvl->{state}          = 'Resolved';
-                    next;
-                }
-            }
-            else {
-                $lvl->{outside_count} = 0;
-            }
+        }
+        else {
+            # Si el cierre coincide exactamente con el nivel,
+            # no confirma aceptación ni recuperación.
+            #
+            # Reiniciamos la secuencia porque los cierres necesarios
+            # para Run deben ser consecutivos.
+            $lvl->{outside_count} = 0;
+            $lvl->{state}         = 'Swept';
         }
     }
 }
+
 
 
 sub audit_volume_pivots {
@@ -1262,7 +1732,6 @@ sub audit_clean_volume_sequence {
 sub audit_liquidity_classification {
     my ($self, $candles) = @_;
 
-    my $grab_max_bars = 3;
     my $run_bars      = $self->{confirm_bars} // 3;
 
     my %audit = (
@@ -1364,29 +1833,39 @@ sub audit_liquidity_classification {
 
         elsif ($class eq 'Grab') {
 
-            $audit{grab_count}++;
+        $audit{grab_count}++;
 
-            my $bars_after_sweep = $resolved_i - $swept_i;
+        my $bars_after_sweep = $resolved_i - $swept_i;
 
-            if ($bars_after_sweep < 1 || $bars_after_sweep > $grab_max_bars) {
-                $audit{grab_timing_errors}++;
-                _audit_push_example(\%audit, "BAD_GRAB_TIMING", $lvl);
-            }
-
-            my $valid = 0;
-
-            if ($type eq 'BSL') {
-                $valid = (($resolved_bar->{close} // 0) < $price);
-            }
-            elsif ($type eq 'SSL') {
-                $valid = (($resolved_bar->{close} // 0) > $price);
-            }
-
-            if (!$valid) {
-                $audit{sweep_rule_errors}++;
-                _audit_push_example(\%audit, "BAD_GRAB_CLOSE", $lvl);
-            }
+        # Un Grab no puede resolverse en la misma vela.
+        # Si ocurre en la misma vela, corresponde a Sweep.
+        if ($bars_after_sweep < 1) {
+            $audit{grab_timing_errors}++;
+            _audit_push_example(\%audit, "GRAB_ON_SWEEP_BAR", $lvl);
         }
+
+        my $valid_close = 0;
+
+        if ($type eq 'BSL') {
+            $valid_close =
+                ($resolved_bar->{close} // 0) < $price;
+        }
+        elsif ($type eq 'SSL') {
+            $valid_close =
+                ($resolved_bar->{close} // 0) > $price;
+        }
+
+        if (!$valid_close) {
+            $audit{sweep_rule_errors}++;
+            _audit_push_example(\%audit, "BAD_GRAB_CLOSE", $lvl);
+        }
+
+        # No puede haber alcanzado la confirmación de Run.
+        if (($lvl->{outside_count} // 0) >= $run_bars) {
+            $audit{grab_timing_errors}++;
+            _audit_push_example(\%audit, "GRAB_AFTER_RUN_CONFIRMATION", $lvl);
+        }
+    } 
 
         elsif ($class eq 'Run') {
 
