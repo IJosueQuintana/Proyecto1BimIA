@@ -952,7 +952,7 @@ sub draw {
             $self->{price_panel},
             $self->{last_smc_external}->{fvg} || [],
 
-            # Fuera de Replay: últimos 3 FVG detectados.
+            # Fuera de Replay: últimos 3 FVG detectadoss.
             history_limit => 3,
 
             # En Replay: únicamente los FVG activos en ese punto.
