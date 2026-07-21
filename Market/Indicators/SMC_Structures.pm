@@ -710,7 +710,7 @@ sub _detect_fvg {
 
             # El FVG queda confirmado en i.
             # Solo se comprueban velas posteriores a su creación.
-            for my $j ($i+1 .. $#$candles) {
+            for my $j ($i .. $#$candles) {
 
                 my $bar = $candles->[$j];
 
@@ -746,8 +746,13 @@ sub _detect_fvg {
                 original_top    => $top,
                 original_bottom => $bottom,
 
-                mitigated       => $mitigated,
-                fully_mitigated => $mitigated,
+                mitigated => $mitigated,
+
+                # En este proyecto, mitigated representa el primer contacto.
+                # No significa necesariamente que el FVG haya sido rellenado
+                # por completo.
+                fully_mitigated => 0,
+
                 mitigated_index => $mitigated_index,
 
                 active => $mitigated ? 0 : 1,
@@ -775,7 +780,7 @@ sub _detect_fvg {
             my $mitigated       = 0;
             my $mitigated_index = undef;
 
-            for my $j ($i+1 .. $#$candles) {
+            for my $j ($i .. $#$candles) {
 
                 my $bar = $candles->[$j];
 
@@ -808,8 +813,11 @@ sub _detect_fvg {
                 original_top    => $top,
                 original_bottom => $bottom,
 
-                mitigated       => $mitigated,
-                fully_mitigated => $mitigated,
+                mitigated => $mitigated,
+
+                # El primer contacto no implica relleno completo del FVG.
+                fully_mitigated => 0,
+
                 mitigated_index => $mitigated_index,
 
                 active => $mitigated ? 0 : 1,
@@ -858,9 +866,12 @@ sub _detect_order_blocks {
 
         next if $raw_type !~ /UP|DOWN/;
 
-        my $from_index = defined $event->{pivot_confirmed_index}
-            ? $event->{pivot_confirmed_index}
-            : $event->{pivot_index};
+        # El tramo debe comenzar en la ubicación real del pivote.
+        # pivot_confirmed_index indica cuándo se confirmó, pero puede
+        # dejar fuera la vela que originó el Order Block.
+        my $from_index = defined $event->{pivot_index}
+            ? $event->{pivot_index}
+            : $event->{pivot_confirmed_index};
 
         my $break_index = defined $event->{break_index}
             ? $event->{break_index}
@@ -869,6 +880,9 @@ sub _detect_order_blocks {
         next if !defined $from_index;
         next if !defined $break_index;
         next if $break_index <= $from_index;
+        # En Replay o cálculos parciales no deben procesarse
+        # rupturas que todavía no han ocurrido.
+        next if $break_index > $last_index;
 
         my $candles =
             $market->get_slice($from_index, $break_index);
@@ -879,20 +893,52 @@ sub _detect_order_blocks {
 
         my $selected_local_index;
 
-        # ==========================================================
+    # ==========================================================
+    # SELECCIÓN DEL ORIGEN DEL ORDER BLOCK
+    #
+    # Bullish OB:
+    #   última vela bajista anterior al rompimiento alcista.
+    #
+    # Bearish OB:
+    #   última vela alcista anterior al rompimiento bajista.
+    #
+    # El recorrido se realiza hacia atrás para seleccionar la vela
+    # opuesta más cercana al impulso que produjo el BOS o CHoCH.
+    # ==========================================================
+
+    if ($raw_type =~ /UP/) {
+
+        # ------------------------------------------------------
         # BULLISH ORDER BLOCK
-        #
-        # LuxAlgo busca el mínimo filtrado dentro del tramo.
-        # ==========================================================
-        if ($raw_type =~ /UP/) {
+        # Buscar la última vela bajista antes de la ruptura.
+        # ------------------------------------------------------
+        for (
+            my $j = $#$candles - 1;
+            $j >= 0;
+            $j--
+        ) {
+            my $bar = $candles->[$j];
+
+            next if !$bar;
+            next if !defined $bar->{open};
+            next if !defined $bar->{close};
+            next if !defined $bar->{high};
+            next if !defined $bar->{low};
+
+            if ($bar->{close} < $bar->{open}) {
+                $selected_local_index = $j;
+                last;
+            }
+        }
+
+        # Respaldo:
+        # si no existe una vela bajista, utilizar el mínimo
+        # del tramo, sin incluir la vela de ruptura.
+        if (!defined $selected_local_index) {
 
             my $best_low;
 
-            for my $j (0 .. $#$candles) {
-
-                # No usar la vela de ruptura como origen del OB.
-                next if $j == $#$candles;
-
+            for my $j (0 .. $#$candles - 1) {
                 my $bar = $candles->[$j];
 
                 next if !$bar;
@@ -908,20 +954,40 @@ sub _detect_order_blocks {
                 }
             }
         }
+    }
+    elsif ($raw_type =~ /DOWN/) {
 
-        # ==========================================================
+        # ------------------------------------------------------
         # BEARISH ORDER BLOCK
-        #
-        # LuxAlgo busca el máximo filtrado dentro del tramo.
-        # ==========================================================
-        elsif ($raw_type =~ /DOWN/) {
+        # Buscar la última vela alcista antes de la ruptura.
+        # ------------------------------------------------------
+        for (
+            my $j = $#$candles - 1;
+            $j >= 0;
+            $j--
+        ) {
+            my $bar = $candles->[$j];
+
+            next if !$bar;
+            next if !defined $bar->{open};
+            next if !defined $bar->{close};
+            next if !defined $bar->{high};
+            next if !defined $bar->{low};
+
+            if ($bar->{close} > $bar->{open}) {
+                $selected_local_index = $j;
+                last;
+            }
+        }
+
+        # Respaldo:
+        # si no existe una vela alcista, utilizar el máximo
+        # del tramo, sin incluir la vela de ruptura.
+        if (!defined $selected_local_index) {
 
             my $best_high;
 
-            for my $j (0 .. $#$candles) {
-
-                next if $j == $#$candles;
-
+            for my $j (0 .. $#$candles - 1) {
                 my $bar = $candles->[$j];
 
                 next if !$bar;
@@ -937,6 +1003,7 @@ sub _detect_order_blocks {
                 }
             }
         }
+    }
 
         next if !defined $selected_local_index;
 
@@ -1062,8 +1129,12 @@ sub _detect_order_blocks {
             first_touch_index => $first_touch_index,
 
             invalidated       => $invalidated,
-            mitigated         => $invalidated,
-            mitigated_index   => $invalidated_index,
+            invalidated_index => $invalidated_index,
+
+            # En esta implementación, un OB se considera mitigado
+            # cuando el precio vuelve a tocar su zona.
+            mitigated       => $touched,
+            mitigated_index => $first_touch_index,
 
             active => $invalidated ? 0 : 1,
 
@@ -1073,6 +1144,39 @@ sub _detect_order_blocks {
             source       => 'LUXALGO_ORDER_BLOCK',
         };
     }
+    my $active_count = grep {
+    $_
+    && ref($_) eq 'HASH'
+    && $_->{active}
+    } @order_blocks;
+
+    my $invalidated_count = grep {
+        $_
+        && ref($_) eq 'HASH'
+        && $_->{invalidated}
+    } @order_blocks;
+
+    my $bullish_count = grep {
+        $_
+        && ref($_) eq 'HASH'
+        && ($_->{type} // '') eq 'BULLISH_OB'
+    } @order_blocks;
+
+    my $bearish_count = grep {
+        $_
+        && ref($_) eq 'HASH'
+        && ($_->{type} // '') eq 'BEARISH_OB'
+    } @order_blocks;
+
+    print STDERR
+        "[OB AUDIT] mode=" . ($self->{mode} // 'unknown')
+        . " total=" . scalar(@order_blocks)
+        . " active=$active_count"
+        . " invalidated=$invalidated_count"
+        . " bullish=$bullish_count"
+        . " bearish=$bearish_count"
+        . " until=$last_index\n";
+
 
     return \@order_blocks;
 }

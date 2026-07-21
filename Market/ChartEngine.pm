@@ -102,8 +102,121 @@ sub new {
         show_fvg          => 0,
         show_order_blocks => 0,
 
+        # ============================================================
+        # ANCHORED VWAP
+        # ============================================================
 
-        show_volume_pivots => 0,
+        show_anchored_vwap => 0,
+
+        # MANUAL, SESSION, DAY, WEEK o MONTH
+        vwap_anchor_mode => 'MANUAL',
+
+        # Índice elegido por el usuario en modo MANUAL.
+        vwap_anchor_index => undef,
+
+        # Indica que el próximo clic sobre el gráfico seleccionará el ancla.
+        vwap_selecting_anchor => 0,
+
+        # Precio utilizado:
+        # HLC3 = (high + low + close) / 3
+        vwap_price_source => 'HLC3',
+
+        # Bandas de desviación estándar.
+        show_vwap_band_1 => 1,
+        show_vwap_band_2 => 0,
+        show_vwap_band_3 => 0,
+
+        vwap_band_mult_1 => 1.0,
+        vwap_band_mult_2 => 2.0,
+        vwap_band_mult_3 => 3.0,
+
+        # ============================================================
+        # CACHE DEL VWAP
+        # ============================================================
+
+        vwap_cache => undef,
+
+        vwap_cache_anchor => undef,
+        vwap_cache_until  => undef,
+        vwap_cache_mode   => undef,
+
+                    # ============================================================
+        # VOLUME PROFILE
+        # ============================================================
+
+        show_volume_profile => 0,
+
+        # Cantidad de filas o niveles de precio utilizados para
+        # construir el histograma del perfil de volumen.
+        volume_profile_rows => 48,
+
+        # Porcentaje del volumen total que debe pertenecer al
+        # área de valor. El valor 0.70 representa el 70 %.
+        volume_profile_value_area => 0.70,
+
+        # ============================================================
+        # MODO DEL VOLUME PROFILE
+        # ============================================================
+
+        # Modos disponibles:
+        #
+        # VISIBLE:
+        #   Utiliza únicamente las velas visibles actualmente.
+        #
+        # SESSION:
+        #   Utiliza las velas pertenecientes a la sesión actual.
+        #
+        # BOS_CHOCH:
+        #   Utiliza como ancla el último evento estructural
+        #   BOS o CHoCH confirmado.
+        #
+        # HISTORICAL:
+        #   Utiliza una cantidad fija de velas históricas.
+        volume_profile_mode => 'VISIBLE',
+
+        # Índice inicial utilizado por los modos que requieren
+        # un punto de anclaje, principalmente BOS_CHOCH.
+        volume_profile_anchor_index => undef,
+
+        # Conserva el ancla estructural anterior. Esto permitirá
+        # limitar el perfil entre dos eventos BOS/CHoCH consecutivos
+        # cuando se implemente ese comportamiento.
+        volume_profile_previous_anchor_index => undef,
+
+        # Tipo del evento que produjo el anclaje.
+        # Sus valores podrán ser: BOS, CHOCH o undef.
+        volume_profile_anchor_type => undef,
+
+        # Alcance estructural del evento utilizado como ancla.
+        # Sus valores podrán ser: internal, external o undef.
+        volume_profile_anchor_scope => undef,
+
+        # Última vela que puede utilizar el perfil.
+        # En Replay evita que se utilicen velas futuras.
+        volume_profile_until_index => undef,
+
+        # Cantidad de velas utilizadas por el modo HISTORICAL.
+        volume_profile_historical_bars => 500,
+
+        # ============================================================
+        # CACHE DEL VOLUME PROFILE
+        # ============================================================
+
+        volume_profile_cache       => undef,
+        volume_profile_cache_first => undef,
+        volume_profile_cache_last  => undef,
+
+        # También se guardará el modo con el cual se construyó
+        # el caché para evitar reutilizar un perfil de otro modo.
+        volume_profile_cache_mode => undef,
+
+        # Resultados principales del perfil.
+        volume_profile_poc => undef,
+        volume_profile_vah => undef,
+        volume_profile_val => undef,
+        volume_profile_max => undef,
+
+        show_volume_pivots => 0,    
 
         price_panel => Market::Panels::PricePanel->new(),
         atr_panel   => Market::Panels::ATRPanel->new(),
@@ -466,9 +579,8 @@ sub run {
         -variable => \$self->{show_order_blocks},
         -command  => sub { $self->draw(); }
     )->pack(-side => 'left');
-
-
-
+    
+   
 
 
 
@@ -577,6 +689,9 @@ sub set_timeframe {
     $self->{indicators}->update_last($self->{market});
     $self->{locked_index} = undef;
     $self->{lock_y_on_zoom} = 0;
+    # Las velas cambiaron de temporalidad.
+    $self->invalidate_vwap_cache();
+    $self->invalidate_volume_profile_cache();
     $self->fit_all();
     $self->draw();
 }
@@ -841,7 +956,25 @@ sub draw {
             * ($plot_bottom - $plot_top);
     };
 
-    $state{y_of} = $y_of;
+        $state{y_of} = $y_of;
+
+    # ========================================================
+    # ANCHORED VWAP
+    # Se dibuja después de las velas y después de resolver
+    # la escala vertical, pero antes de los overlays SMC.
+    # ========================================================
+    if ($self->{show_anchored_vwap}) {
+        $self->_draw_anchored_vwap(
+            canvas      => $c,
+            start       => $start,
+            end         => $end,
+            x_of        => $x_of,
+            state       => \%state,
+            price_panel => $self->{price_panel},
+        );
+    }
+
+        
 
     
     #use Data::Dump qw(dump);
@@ -854,21 +987,57 @@ sub draw {
     : $self->{market}->last_index();
 
     my $needs_smc_or_liquidity =
-       $self->{show_external_zigzag}
+       (
+            $self->{show_volume_profile}
+            &&
+            uc(
+                $self->{volume_profile_mode}
+                //
+                'VISIBLE'
+            ) eq 'BOS_CHOCH'
+       )
+
+    || $self->{show_external_zigzag}
     || $self->{show_external_labels}
     || $self->{show_internal_zigzag}
     || $self->{show_internal_labels}
+
+    # BOS / CHoCH
     || $self->{layers}{external}{bos}
     || $self->{layers}{external}{choch}
     || $self->{layers}{internal}{bos}
     || $self->{layers}{internal}{choch}
+
+    # Liquidez
     || $self->{show_bsl}
     || $self->{show_ssl}
     || $self->{show_eqh}
     || $self->{show_eql}
-    || $self->{show_volume_pivots};
+    || $self->{show_volume_pivots}
+
+    # FVG y Order Blocks deben poder calcularse y mostrarse
+    # independientemente de que el ZigZag esté visible.
+    || $self->{show_fvg}
+    || $self->{show_order_blocks};
 
     $self->update_smc_overlay($calc_until) if $needs_smc_or_liquidity;
+
+        # ========================================================
+        # VOLUME PROFILE
+        #
+        # Se dibuja después de actualizar SMC para que el modo
+        # BOS_CHOCH utilice los eventos estructurales confirmados
+        # correspondientes a la vela actual.
+        # ========================================================
+        if ($self->{show_volume_profile}) {
+            $self->_draw_volume_profile(
+                canvas      => $c,
+                start       => $start,
+                end         => $end,
+                state       => \%state,
+                price_panel => $self->{price_panel},
+            );
+        }
 
     if ($self->{show_external_zigzag} || $self->{show_external_labels}) {
     $self->{smc_overlay}->draw(
@@ -1401,11 +1570,40 @@ sub x_to_index {
 sub mouse_down {
     my ($self, $x, $y) = @_;
 
-        if ($self->{replay_selecting}) {
+    # ========================================================
+    # SELECCIÓN DEL INICIO DEL REPLAY
+    # ========================================================
+    if ($self->{replay_selecting}) {
         my $idx = $self->x_to_index($x);
+
         $self->replay_start_at($idx);
+
         return;
     }
+
+    # ========================================================
+    # SELECCIÓN MANUAL DEL ANCLA VWAP
+    # ========================================================
+    if ($self->{vwap_selecting_anchor}) {
+        my $idx = $self->x_to_index($x);
+
+        my $until_index =
+            $self->_current_until_index();
+
+        $idx = 0
+            if $idx < 0;
+
+        $idx = $until_index
+            if $idx > $until_index;
+
+        $self->set_vwap_anchor_index($idx);
+
+        print STDERR
+            ">>> VWAP ANCHOR SELECTED: index=$idx\n";
+
+        return;
+    }
+
     my ($w, $h, $right, $atr_top) = $self->layout();
 
     # Drag sobre escala inferior: zoom horizontal
@@ -1790,6 +1988,8 @@ sub replay_select_start {
     $self->{replay_mode}      = 0;
     $self->{replay_selecting} = 1;
     $self->{replay_index}     = undef;
+    $self->invalidate_vwap_cache();
+    $self->invalidate_volume_profile_cache();
 
     print ">>> REPLAY SELECT MODE: haga click sobre la vela inicial del Replay\n";
 
@@ -1809,7 +2009,8 @@ sub replay_start_at {
     $self->{replay_selecting} = 0;
     $self->{replay_mode}      = 1;
     $self->{replay_index}     = $idx;
-
+    $self->invalidate_vwap_cache();
+    $self->invalidate_volume_profile_cache();
     $self->_replay_apply_window();
 
     if ($self->{auto_y}) {
@@ -1832,7 +2033,8 @@ sub replay_exit {
     $self->{replay_mode}      = 0;
     $self->{replay_selecting} = 0;
     $self->{replay_index}     = undef;
-
+    $self->invalidate_vwap_cache();
+    $self->invalidate_volume_profile_cache();
     $self->fit_all();
     $self->draw();
 }
@@ -1862,7 +2064,10 @@ sub replay_play {
     );
 }
 
+
+
 sub replay_step {
+
     my ($self, $dir) = @_;
 
     return if !$self->{replay_mode};
@@ -1873,11 +2078,13 @@ sub replay_step {
 
     $self->{replay_index} = 0 if $self->{replay_index} < 0;
     $self->{replay_index} = $last if $self->{replay_index} > $last;
-
+    $self->invalidate_vwap_cache();
+    $self->invalidate_volume_profile_cache();
     $self->_replay_apply_window();
     $self->draw();
     $self->audit_replay_state() if $self->{debug_replay};
 }
+
 
 sub _replay_apply_window {
     my ($self) = @_;
@@ -2778,6 +2985,8 @@ sub _sync_layer_flags {
 
 
 sub _build_layers_popup {
+
+
     my ($self) = @_;
 
     my $popup = $self->{layers_popup};
@@ -2985,6 +3194,303 @@ sub _build_layers_popup {
     $row++;
 
     # ==========================================================
+    # ANCHORED VWAP
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Anchored VWAP',
+        -font       => ['Arial', 9, 'bold'],
+        -background => '#f5f5f5',
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -padx       => 8,
+        -pady       => [8, 4],
+    );
+
+    $row++;
+
+    # Mostrar u ocultar VWAP.
+    $frame->Checkbutton(
+        -text       => 'Mostrar VWAP',
+        -variable   => \$self->{show_anchored_vwap},
+        -background => '#f5f5f5',
+        -command    => sub {
+            $self->invalidate_vwap_cache();
+            $self->draw();
+        },
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -sticky     => 'w',
+        -padx       => 20,
+        -pady       => 2,
+    );
+
+    $row++;
+    # ==========================================================
+    # SELECTOR DE MODO VWAP
+    # Funciona igual que Temporalidad y ZZ Interno.
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Modo VWAP',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    my $vwap_mode_display = $frame->Button(
+        -text  => $self->{vwap_anchor_mode} // 'MANUAL',
+        -width => 12,
+    );
+
+    $vwap_mode_display->grid(
+        -row        => $row,
+        -column     => 1,
+        -columnspan => 2,
+        -sticky     => 'we',
+        -padx       => 4,
+        -pady       => 2,
+    );
+
+    # Ventana flotante propia para los modos VWAP.
+    my $vwap_mode_popup = $self->{mw}->Toplevel();
+
+    $vwap_mode_popup->withdraw();
+    $vwap_mode_popup->overrideredirect(1);
+
+    my $vwap_mode_list = $vwap_mode_popup->Listbox(
+        -height          => 4,
+        -width           => 12,
+        -exportselection => 0,
+    )->pack(
+        -fill   => 'both',
+        -expand => 1,
+    );
+
+    my @vwap_modes = (
+        'MANUAL',
+        'DAY',
+        'WEEK',
+        'MONTH',
+    );
+
+    for my $mode (@vwap_modes) {
+        $vwap_mode_list->insert('end', $mode);
+    }
+
+    # Abrir o cerrar el selector.
+    $vwap_mode_display->configure(
+        -command => sub {
+
+            if ($vwap_mode_popup->state eq 'withdrawn') {
+
+                my $x = $vwap_mode_display->rootx;
+                my $y =
+                    $vwap_mode_display->rooty
+                    + $vwap_mode_display->height;
+
+                $vwap_mode_popup->geometry("+$x+$y");
+
+                $vwap_mode_popup->deiconify();
+                $vwap_mode_popup->raise();
+
+            } else {
+                $vwap_mode_popup->withdraw();
+            }
+        },
+    );
+
+    # Procesar la selección.
+    $vwap_mode_list->bind(
+        '<<ListboxSelect>>' => sub {
+
+            my @selection =
+                $vwap_mode_list->curselection;
+
+            return if !@selection;
+
+            my $position = $selection[0];
+
+            my $mode =
+                $vwap_modes[$position];
+
+            $self->{vwap_anchor_mode} = $mode;
+
+            $vwap_mode_display->configure(
+                -text => $mode,
+            );
+
+            $vwap_mode_popup->withdraw();
+
+            $self->{show_anchored_vwap} = 1;
+
+            # Los modos automáticos no esperan un clic.
+            if ($mode ne 'MANUAL') {
+                $self->{vwap_selecting_anchor} = 0;
+            }
+
+            $self->invalidate_vwap_cache();
+            $self->draw();
+        },
+    );
+
+    $row++;
+    
+    # Botón para seleccionar manualmente la vela de inicio.
+    $frame->Label(
+        -text       => 'Ancla manual',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    $frame->Button(
+        -text => 'Seleccionar vela',
+        -command => sub {
+
+            $self->{vwap_anchor_mode} = 'MANUAL';
+
+            $vwap_mode_display->configure(
+                -text => 'MANUAL',
+            );
+
+            $self->{show_anchored_vwap} = 1;
+
+            $self->start_vwap_anchor_selection();
+
+            print STDERR
+                ">>> VWAP SELECT MODE: haga clic sobre una vela\n";
+
+            # Cerrar el panel principal para permitir
+            # seleccionar cómodamente una vela.
+            $self->{layers_popup}->withdraw();
+
+            # Cerrar también el selector de modo si estaba abierto.
+            $vwap_mode_popup->withdraw();
+
+            $self->draw();
+        },
+        
+    )->grid(
+        -row        => $row,
+        -column     => 1,
+        -columnspan => 2,
+        -sticky     => 'we',
+        -padx       => 4,
+        -pady       => 2,
+    );
+
+    $row++;
+
+    # Bandas de desviación estándar.
+    $frame->Label(
+        -text       => 'Bandas',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    my $vwap_bands_frame = $frame->Frame(
+        -background => '#f5f5f5',
+    );
+
+    $vwap_bands_frame->grid(
+        -row        => $row,
+        -column     => 1,
+        -columnspan => 2,
+        -sticky     => 'w',
+        -padx       => 4,
+    );
+
+    $vwap_bands_frame->Checkbutton(
+        -text       => '±1',
+        -variable   => \$self->{show_vwap_band_1},
+        -background => '#f5f5f5',
+        -command    => sub {
+            $self->draw();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 2,
+    );
+
+    $vwap_bands_frame->Checkbutton(
+        -text       => '±2',
+        -variable   => \$self->{show_vwap_band_2},
+        -background => '#f5f5f5',
+        -command    => sub {
+            $self->draw();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 2,
+    );
+
+    $vwap_bands_frame->Checkbutton(
+        -text       => '±3',
+        -variable   => \$self->{show_vwap_band_3},
+        -background => '#f5f5f5',
+        -command    => sub {
+            $self->draw();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 2,
+    );
+
+    $row++;
+
+        $frame->Label(
+        -text       => 'Volume Profile',
+        -font       => ['Arial',9,'bold'],
+        -background => '#f5f5f5',
+    )->grid(
+        -row=>$row,
+        -column=>0,
+        -columnspan=>3,
+        -pady=>[8,4],
+    );
+
+    $row++;
+
+    $frame->Checkbutton(
+        -text       => 'Mostrar Volume Profile',
+        -variable   => \$self->{show_volume_profile},
+        -background => '#f5f5f5',
+        -command    => sub{
+
+            $self->invalidate_volume_profile_cache();
+
+            $self->draw();
+
+        },
+    )->grid(
+        -row=>$row,
+        -column=>0,
+        -columnspan=>3,
+        -sticky=>'w',
+        -padx=>20,
+    );
+
+    $row++;
+
+    # ==========================================================
     # BOTÓN OCULTAR TODO
     # ==========================================================
     $frame->Button(
@@ -2998,18 +3504,1763 @@ sub _build_layers_popup {
                     $self->{layers}{$scope}{$key} = 0;
                 }
             }
+            $self->{show_anchored_vwap} = 0;
+    $self->{vwap_selecting_anchor} = 0;
 
-            $self->_sync_layer_flags();
-            $self->draw();
-        },
-    )->grid(
-        -row        => $row,
-        -column     => 0,
-        -columnspan => 3,
-        -sticky     => 'we',
-        -padx       => 8,
-        -pady       => [10, 5],
+    $self->invalidate_vwap_cache();
+
+                $self->_sync_layer_flags();
+                $self->draw();
+            },
+        )->grid(
+            -row        => $row,
+            -column     => 0,
+            -columnspan => 3,
+            -sticky     => 'we',
+            -padx       => 8,
+            -pady       => [10, 5],
+        );
+}
+
+sub _current_until_index {
+    my ($self) = @_;
+
+    my $last_index = $self->{market}->last_index();
+
+    # En Replay únicamente puede calcularse hasta la vela revelada.
+    if (
+        $self->{replay_mode}
+        && defined $self->{replay_index}
+        && $self->{replay_index} < $last_index
+    ) {
+        return $self->{replay_index};
+    }
+
+    return $last_index;
+}
+
+
+sub _vwap_period_key {
+    my ($self, $candle, $mode) = @_;
+
+    return undef if !$candle;
+    return undef if !defined $candle->{epoch};
+
+    my @time = localtime($candle->{epoch});
+
+    my $year  = $time[5] + 1900;
+    my $month = $time[4] + 1;
+    my $day   = $time[3];
+    my $wday  = $time[6];
+
+    $mode = uc($mode // 'MANUAL');
+
+    # SESSION y DAY utilizan por el momento la misma división:
+    # cada nueva fecha inicia un nuevo VWAP.
+    if ($mode eq 'SESSION' || $mode eq 'DAY') {
+        return sprintf(
+            '%04d-%02d-%02d',
+            $year,
+            $month,
+            $day
+        );
+    }
+
+    if ($mode eq 'WEEK') {
+
+        # Perl:
+        # 0 = domingo
+        # 1 = lunes
+        # ...
+        # 6 = sábado
+        #
+        # Convertimos la fecha actual al lunes de su semana.
+        my $days_from_monday = $wday == 0
+            ? 6
+            : $wday - 1;
+
+        my $monday_epoch =
+            $candle->{epoch}
+            - ($days_from_monday * 86400);
+
+        my @monday = localtime($monday_epoch);
+
+        return sprintf(
+            '%04d-%02d-%02d',
+            $monday[5] + 1900,
+            $monday[4] + 1,
+            $monday[3]
+        );
+    }
+
+    if ($mode eq 'MONTH') {
+        return sprintf(
+            '%04d-%02d',
+            $year,
+            $month
+        );
+    }
+
+    return 'MANUAL';
+}
+
+
+sub _resolve_vwap_anchor_index {
+    my ($self, $until_index) = @_;
+
+    return undef if !defined $until_index;
+    return undef if $until_index < 0;
+
+    my $market = $self->{market};
+    my $mode   = uc($self->{vwap_anchor_mode} // 'MANUAL');
+
+    # --------------------------------------------------------
+    # Ancla seleccionada manualmente
+    # --------------------------------------------------------
+    if ($mode eq 'MANUAL') {
+
+        return undef
+            if !defined $self->{vwap_anchor_index};
+
+        return undef
+            if $self->{vwap_anchor_index} > $until_index;
+
+        return 0
+            if $self->{vwap_anchor_index} < 0;
+
+        return $self->{vwap_anchor_index};
+    }
+
+    # --------------------------------------------------------
+    # Anclas automáticas
+    # --------------------------------------------------------
+    my $until_candle = $market->get_candle($until_index);
+
+    return undef if !$until_candle;
+
+    my $target_key =
+        $self->_vwap_period_key(
+            $until_candle,
+            $mode
+        );
+
+    return undef if !defined $target_key;
+
+    my $anchor_index = $until_index;
+
+    # Recorrer hacia atrás hasta encontrar el inicio
+    # del día, semana o mes actualmente activo.
+    for (
+        my $i = $until_index;
+        $i >= 0;
+        $i--
+    ) {
+        my $bar = $market->get_candle($i);
+
+        last if !$bar;
+
+        my $key =
+            $self->_vwap_period_key(
+                $bar,
+                $mode
+            );
+
+        last
+            if !defined $key
+            || $key ne $target_key;
+
+        $anchor_index = $i;
+    }
+
+    return $anchor_index;
+}
+
+
+sub _calculate_anchored_vwap {
+    my ($self, %args) = @_;
+
+    my $market = $self->{market};
+
+    return [] if !$market;
+
+    my $until_index = defined $args{until_index}
+        ? $args{until_index}
+        : $self->_current_until_index();
+
+    my $market_last = $market->last_index();
+
+    $until_index = $market_last
+        if $until_index > $market_last;
+
+    return [] if $until_index < 0;
+
+    my $anchor_index = defined $args{anchor_index}
+        ? $args{anchor_index}
+        : $self->_resolve_vwap_anchor_index(
+            $until_index
+        );
+
+    return [] if !defined $anchor_index;
+    return [] if $anchor_index > $until_index;
+
+        $anchor_index = 0
+        if $anchor_index < 0;
+
+    # Modo actual utilizado para validar el caché.
+    my $current_mode =
+        uc($self->{vwap_anchor_mode} // 'MANUAL');
+
+    # Reutilizar el cálculo anterior si nada cambió.
+    if (
+        defined $self->{vwap_cache}
+        && ref($self->{vwap_cache}) eq 'ARRAY'
+        && defined $self->{vwap_cache_anchor}
+        && defined $self->{vwap_cache_until}
+        && defined $self->{vwap_cache_mode}
+        && $self->{vwap_cache_anchor} == $anchor_index
+        && $self->{vwap_cache_until} == $until_index
+        && uc($self->{vwap_cache_mode}) eq $current_mode
+    ) {
+        return $self->{vwap_cache};
+    }
+    my $mult_1 =
+        $self->{vwap_band_mult_1} // 1.0;
+
+    my $mult_2 =
+        $self->{vwap_band_mult_2} // 2.0;
+
+    my $mult_3 =
+        $self->{vwap_band_mult_3} // 3.0;
+
+    my $sum_volume        = 0;
+    my $sum_price_volume  = 0;
+    my $sum_price2_volume = 0;
+
+    my @values;
+
+    for my $i ($anchor_index .. $until_index) {
+
+        my $bar = $market->get_candle($i);
+
+        next if !$bar;
+        next if !defined $bar->{high};
+        next if !defined $bar->{low};
+        next if !defined $bar->{close};
+
+        my $volume = defined $bar->{volume}
+            ? $bar->{volume}
+            : 0;
+
+        # No incorporar volúmenes negativos.
+        $volume = 0 if $volume < 0;
+
+        # Igual que el VWAP del indicador DIY:
+        # precio típico HLC3.
+        my $typical_price = (
+            $bar->{high}
+            + $bar->{low}
+            + $bar->{close}
+        ) / 3;
+
+        # Cuando no existe volumen, esa vela no altera
+        # el acumulado. Esto evita divisiones por cero.
+        if ($volume > 0) {
+            $sum_volume += $volume;
+
+            $sum_price_volume +=
+                $typical_price
+                * $volume;
+
+            $sum_price2_volume +=
+                $typical_price
+                * $typical_price
+                * $volume;
+        }
+
+        next if $sum_volume <= 0;
+
+        my $vwap =
+            $sum_price_volume
+            / $sum_volume;
+
+        my $variance =
+            ($sum_price2_volume / $sum_volume)
+            - ($vwap * $vwap);
+
+        # Puede aparecer un pequeño valor negativo por
+        # precisión numérica.
+        $variance = 0
+            if $variance < 0
+            && abs($variance) < 0.0000001;
+
+        $variance = 0
+            if $variance < 0;
+
+        my $stdev = sqrt($variance);
+
+        push @values, {
+            index => $i,
+
+            anchor_index => $anchor_index,
+
+            typical_price => $typical_price,
+            volume        => $volume,
+
+            cumulative_volume => $sum_volume,
+
+            vwap     => $vwap,
+            variance => $variance,
+            stdev    => $stdev,
+
+            upper_1 => $vwap + $stdev * $mult_1,
+            lower_1 => $vwap - $stdev * $mult_1,
+
+            upper_2 => $vwap + $stdev * $mult_2,
+            lower_2 => $vwap - $stdev * $mult_2,
+
+            upper_3 => $vwap + $stdev * $mult_3,
+            lower_3 => $vwap - $stdev * $mult_3,
+
+            price_above_vwap =>
+                $bar->{close} >= $vwap
+                    ? 1
+                    : 0,
+
+            distance_to_vwap =>
+                $bar->{close} - $vwap,
+
+            source => 'ANCHORED_VWAP',
+        };
+    }
+
+    $self->{vwap_cache} = \@values;
+
+    $self->{vwap_cache_anchor} = $anchor_index;
+    $self->{vwap_cache_until}  = $until_index;
+        $self->{vwap_cache_mode} =
+        uc($self->{vwap_anchor_mode} // 'MANUAL');
+
+    return $self->{vwap_cache};
+}
+
+
+sub _draw_vwap_series {
+    my ($self, %args) = @_;
+
+    my $canvas      = $args{canvas};
+    my $values      = $args{values};
+    my $field       = $args{field};
+    my $color       = $args{color};
+    my $width       = $args{width} // 1;
+    my $dash        = $args{dash};
+    my $start       = $args{start};
+    my $end         = $args{end};
+    my $x_of        = $args{x_of};
+    my $state       = $args{state};
+    my $price_panel = $args{price_panel};
+
+    return if !$canvas;
+    return if !$values;
+    return if ref($values) ne 'ARRAY';
+    return if !@$values;
+    return if !$field;
+    return if !$x_of;
+    return if !$price_panel;
+
+    my $scale = $price_panel->{scale};
+
+    my @points;
+
+    for my $point (@$values) {
+
+        next if !$point;
+        next if !defined $point->{index};
+        next if !defined $point->{$field};
+
+        my $index = $point->{index};
+
+        # Mantener un punto adicional fuera de la vista
+        # permite que la línea entre correctamente por el borde.
+        next if $index < $start - 1;
+        next if $index > $end + 1;
+
+        my $local_index =
+            $index - $start;
+
+        my $x =
+            $x_of->($local_index);
+
+        my $y =
+            $scale->price_to_y(
+                $point->{$field},
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $state->{price_h}
+            );
+
+        next if !defined $x;
+        next if !defined $y;
+
+        # Si el valor queda fuera de la escala visible,
+        # cortamos el segmento en lugar de pegarlo al borde.
+        if (
+            $y < 0
+            || $y > $state->{price_h}
+        ) {
+            if (@points >= 4) {
+                my @options = (
+                    -fill  => $color,
+                    -width => $width,
+                );
+
+                push @options, (
+                    -dash => $dash
+                ) if defined $dash;
+
+                $canvas->createLine(
+                    @points,
+                    @options
+                );
+            }
+
+            @points = ();
+            next;
+        }
+
+        push @points, $x, $y;
+    }
+
+    if (@points >= 4) {
+        my @options = (
+            -fill  => $color,
+            -width => $width,
+        );
+
+        push @options, (
+            -dash => $dash
+        ) if defined $dash;
+
+        $canvas->createLine(
+            @points,
+            @options
+        );
+    }
+}
+
+
+sub _draw_anchored_vwap {
+    my ($self, %args) = @_;
+
+    return if !$self->{show_anchored_vwap};
+
+    my $canvas      = $args{canvas};
+    my $start       = $args{start};
+    my $end         = $args{end};
+    my $x_of        = $args{x_of};
+    my $state       = $args{state};
+    my $price_panel = $args{price_panel};
+
+    return if !$canvas;
+    return if !$x_of;
+    return if !$state;
+    return if !$price_panel;
+
+    my $until_index =
+        $self->_current_until_index();
+
+    my $values =
+        $self->_calculate_anchored_vwap(
+            until_index => $until_index,
+        );
+
+    return if !$values;
+    return if !@$values;
+
+    # --------------------------------------------------------
+    # VWAP principal
+    # --------------------------------------------------------
+    $self->_draw_vwap_series(
+        canvas      => $canvas,
+        values      => $values,
+        field       => 'vwap',
+        color       => '#2962ff',
+        width       => 2,
+        start       => $start,
+        end         => $end,
+        x_of        => $x_of,
+        state       => $state,
+        price_panel => $price_panel,
     );
+
+    # --------------------------------------------------------
+    # Primera desviación estándar
+    # --------------------------------------------------------
+    if ($self->{show_vwap_band_1}) {
+
+        $self->_draw_vwap_series(
+            canvas      => $canvas,
+            values      => $values,
+            field       => 'upper_1',
+            color       => '#26a69a',
+            width       => 1,
+            dash        => '.',
+            start       => $start,
+            end         => $end,
+            x_of        => $x_of,
+            state       => $state,
+            price_panel => $price_panel,
+        );
+
+        $self->_draw_vwap_series(
+            canvas      => $canvas,
+            values      => $values,
+            field       => 'lower_1',
+            color       => '#26a69a',
+            width       => 1,
+            dash        => '.',
+            start       => $start,
+            end         => $end,
+            x_of        => $x_of,
+            state       => $state,
+            price_panel => $price_panel,
+        );
+    }
+
+    # --------------------------------------------------------
+    # Segunda desviación estándar
+    # --------------------------------------------------------
+    if ($self->{show_vwap_band_2}) {
+
+        $self->_draw_vwap_series(
+            canvas      => $canvas,
+            values      => $values,
+            field       => 'upper_2',
+            color       => '#ff9800',
+            width       => 1,
+            dash        => '-',
+            start       => $start,
+            end         => $end,
+            x_of        => $x_of,
+            state       => $state,
+            price_panel => $price_panel,
+        );
+
+        $self->_draw_vwap_series(
+            canvas      => $canvas,
+            values      => $values,
+            field       => 'lower_2',
+            color       => '#ff9800',
+            width       => 1,
+            dash        => '-',
+            start       => $start,
+            end         => $end,
+            x_of        => $x_of,
+            state       => $state,
+            price_panel => $price_panel,
+        );
+    }
+
+    # --------------------------------------------------------
+    # Tercera desviación estándar
+    # --------------------------------------------------------
+    if ($self->{show_vwap_band_3}) {
+
+        $self->_draw_vwap_series(
+            canvas      => $canvas,
+            values      => $values,
+            field       => 'upper_3',
+            color       => '#9c27b0',
+            width       => 1,
+            dash        => '-.',
+            start       => $start,
+            end         => $end,
+            x_of        => $x_of,
+            state       => $state,
+            price_panel => $price_panel,
+        );
+
+        $self->_draw_vwap_series(
+            canvas      => $canvas,
+            values      => $values,
+            field       => 'lower_3',
+            color       => '#9c27b0',
+            width       => 1,
+            dash        => '-.',
+            start       => $start,
+            end         => $end,
+            x_of        => $x_of,
+            state       => $state,
+            price_panel => $price_panel,
+        );
+    }
+
+    # --------------------------------------------------------
+    # Marca visual del ancla
+    # --------------------------------------------------------
+    my $anchor_index =
+        $values->[0]{anchor_index};
+
+    if (
+        defined $anchor_index
+        && $anchor_index >= $start
+        && $anchor_index <= $end
+    ) {
+        my $x =
+            $x_of->(
+                $anchor_index - $start
+            );
+
+        if (defined $x) {
+            $canvas->createLine(
+                $x,
+                0,
+                $x,
+                $state->{price_h},
+                -fill  => '#2962ff',
+                -width => 1,
+                -dash  => '.',
+            );
+
+            $canvas->createText(
+                $x + 5,
+                25,
+                -text   => 'VWAP',
+                -fill   => '#2962ff',
+                -font   => [
+                    'Arial',
+                    8,
+                    'bold'
+                ],
+                -anchor => 'w',
+            );
+        }
+    }
+
+    # --------------------------------------------------------
+    # Etiqueta del valor actual
+    # --------------------------------------------------------
+    my $last = $values->[-1];
+
+    if (
+        $last
+        && defined $last->{vwap}
+    ) {
+        my $scale =
+            $price_panel->{scale};
+
+        my $y =
+            $scale->price_to_y(
+                $last->{vwap},
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $state->{price_h}
+            );
+
+        if (
+            defined $y
+            && $y >= 0
+            && $y <= $state->{price_h}
+        ) {
+            my $mode =
+                uc(
+                    $self->{vwap_anchor_mode}
+                    // 'MANUAL'
+                );
+
+            my $label = sprintf(
+                'VWAP %s %.2f',
+                $mode,
+                $last->{vwap}
+            );
+
+            $canvas->createText(
+                $state->{left} + 8,
+                38,
+                -text   => $label,
+                -fill   => '#2962ff',
+                -font   => [
+                    'Arial',
+                    9,
+                    'bold'
+                ],
+                -anchor => 'w',
+            );
+        }
+    }
+}
+
+
+sub set_vwap_anchor_index {
+    my ($self, $index) = @_;
+
+    return if !defined $index;
+
+    my $last_index =
+        $self->{market}->last_index();
+
+    $index = 0
+        if $index < 0;
+
+    $index = $last_index
+        if $index > $last_index;
+
+    my $until_index =
+        $self->_current_until_index();
+
+    $index = $until_index
+        if $index > $until_index;
+
+    $self->{vwap_anchor_index} = $index;
+    $self->{vwap_anchor_mode}  = 'MANUAL';
+
+    $self->{vwap_selecting_anchor} = 0;
+    $self->{show_anchored_vwap}    = 1;
+
+    # Cambió el ancla: el resultado anterior ya no sirve.
+    $self->invalidate_vwap_cache();
+
+    $self->draw()
+        if $self->can('draw');
+}
+
+
+sub start_vwap_anchor_selection {
+    my ($self) = @_;
+
+    $self->{vwap_anchor_mode} = 'MANUAL';
+
+    $self->{vwap_selecting_anchor} = 1;
+
+    $self->{show_anchored_vwap} = 1;
+}
+
+
+sub set_vwap_anchor_mode {
+    my ($self, $mode) = @_;
+
+    $mode = uc($mode // 'MANUAL');
+
+    my %valid = map {
+        $_ => 1
+    } qw(
+        MANUAL
+        SESSION
+        DAY
+        WEEK
+        MONTH
+    );
+
+    return if !$valid{$mode};
+
+    # Si realmente no cambió, no es necesario recalcular.
+    return
+        if defined $self->{vwap_anchor_mode}
+        && uc($self->{vwap_anchor_mode}) eq $mode;
+
+    $self->{vwap_anchor_mode} = $mode;
+
+    if ($mode ne 'MANUAL') {
+        $self->{vwap_selecting_anchor} = 0;
+    }
+
+    # Cambió el período o tipo de ancla.
+    $self->invalidate_vwap_cache();
+
+    $self->draw()
+        if $self->can('draw');
+}
+
+sub invalidate_vwap_cache {
+    my ($self) = @_;
+
+    $self->{vwap_cache} = undef;
+
+    $self->{vwap_cache_anchor} = undef;
+    $self->{vwap_cache_until}  = undef;
+    $self->{vwap_cache_mode}   = undef;
+}
+
+sub _resolve_volume_profile_session_start {
+    my ($self, $until_index) = @_;
+
+    return undef if !defined $until_index;
+    return undef if $until_index < 0;
+
+    my $market = $self->{market};
+
+    return undef if !$market;
+
+    my $until_candle = $market->get_candle($until_index);
+
+    return undef if !$until_candle;
+    return undef if !defined $until_candle->{epoch};
+
+    # Obtenemos la fecha de la última vela disponible.
+    # Durante Replay, until_index corresponderá a la última
+    # vela que ya fue revelada.
+    my @until_time = localtime($until_candle->{epoch});
+
+    my $until_year  = $until_time[5] + 1900;
+    my $until_month = $until_time[4] + 1;
+    my $until_day   = $until_time[3];
+
+    my $session_key = sprintf(
+        '%04d-%02d-%02d',
+        $until_year,
+        $until_month,
+        $until_day
+    );
+
+    my $session_start = $until_index;
+
+    # Recorremos hacia atrás desde la última vela disponible
+    # hasta encontrar el inicio de su fecha o sesión.
+    for (
+        my $i = $until_index;
+        $i >= 0;
+        $i--
+    ) {
+        my $candle = $market->get_candle($i);
+
+        next if !$candle;
+        next if !defined $candle->{epoch};
+
+        my @time = localtime($candle->{epoch});
+
+        my $year  = $time[5] + 1900;
+        my $month = $time[4] + 1;
+        my $day   = $time[3];
+
+        my $candle_session_key = sprintf(
+            '%04d-%02d-%02d',
+            $year,
+            $month,
+            $day
+        );
+
+        # Al llegar a una fecha diferente, la sesión actual
+        # comienza en la vela siguiente.
+        last if $candle_session_key ne $session_key;
+
+        $session_start = $i;
+    }
+
+    return $session_start;
+}
+
+sub _resolve_volume_profile_historical_range {
+    my ($self, $until_index) = @_;
+
+    return if !defined $until_index;
+    return if $until_index < 0;
+
+    # Cantidad de velas históricas que se incluirán.
+    # Si el valor no existe o es inválido, se utilizan
+    # 500 velas como configuración predeterminada.
+    my $historical_bars =
+        $self->{volume_profile_historical_bars}
+        //
+        500;
+
+    $historical_bars = int($historical_bars);
+
+    if ($historical_bars < 1) {
+        $historical_bars = 500;
+    }
+
+    # El índice final siempre será la última vela disponible.
+    # Durante Replay, este índice corresponde únicamente
+    # a las velas que ya han sido reveladas.
+    my $last = $until_index;
+
+    # Se resta bars - 1 porque tanto la primera como la
+    # última vela forman parte del rango.
+    #
+    # Ejemplo:
+    # last = 999
+    # barras = 500
+    # first = 999 - 500 + 1 = 500
+    my $first =
+        $last
+        - $historical_bars
+        + 1;
+
+    # El rango nunca puede comenzar antes de la primera
+    # vela disponible en el conjunto de datos.
+    $first = 0 if $first < 0;
+
+    return ($first, $last);
+}
+
+sub _volume_profile_structural_events {
+    my ($self, $until_index) = @_;
+
+    return [] if !defined $until_index;
+    return [] if $until_index < 0;
+
+    my @structural_events;
+
+    # ============================================================
+    # EVENTOS EXTERNOS BOS / CHoCH
+    # ============================================================
+
+    my $external_result = $self->{last_smc_external};
+
+    if (
+        $external_result
+        && ref($external_result) eq 'HASH'
+        && ref($external_result->{events}) eq 'ARRAY'
+    ) {
+        for my $event (@{$external_result->{events}}) {
+            next if !$event;
+            next if ref($event) ne 'HASH';
+
+            my $raw_type = $event->{raw_type} // '';
+
+            # Solo se consideran eventos estructurales BOS y CHoCH.
+            next if $raw_type !~ /^(?:BOS|CHoCH)_(?:UP|DOWN)$/;
+
+            my $event_index =
+                $event->{break_index}
+                //
+                $event->{index};
+
+            next if !defined $event_index;
+            next if $event_index < 0;
+
+            # Durante Replay no se permiten eventos futuros.
+            next if $event_index > $until_index;
+
+            push @structural_events, {
+                %{$event},
+
+                volume_profile_index => $event_index,
+                volume_profile_scope => 'external',
+            };
+        }
+    }
+
+    # ============================================================
+    # EVENTOS INTERNOS BOS / CHoCH
+    # ============================================================
+
+    my $internal_result = $self->{last_smc_internal};
+
+    if (
+        $internal_result
+        && ref($internal_result) eq 'HASH'
+        && ref($internal_result->{events}) eq 'ARRAY'
+    ) {
+        for my $event (@{$internal_result->{events}}) {
+            next if !$event;
+            next if ref($event) ne 'HASH';
+
+            my $raw_type = $event->{raw_type} // '';
+
+            next if $raw_type !~ /^(?:BOS|CHoCH)_(?:UP|DOWN)$/;
+
+            my $event_index =
+                $event->{break_index}
+                //
+                $event->{index};
+
+            next if !defined $event_index;
+            next if $event_index < 0;
+            next if $event_index > $until_index;
+
+            push @structural_events, {
+                %{$event},
+
+                volume_profile_index => $event_index,
+                volume_profile_scope => 'internal',
+            };
+        }
+    }
+
+    # Se ordenan cronológicamente desde el evento más antiguo
+    # hasta el más reciente.
+    @structural_events = sort {
+           $a->{volume_profile_index}
+        <=> $b->{volume_profile_index}
+    } @structural_events;
+
+    return \@structural_events;
+}
+
+
+sub _resolve_volume_profile_structure_range {
+    my ($self, $until_index) = @_;
+
+    return if !defined $until_index;
+    return if $until_index < 0;
+
+    my $events =
+        $self->_volume_profile_structural_events(
+            $until_index
+        );
+
+    return if !$events;
+    return if ref($events) ne 'ARRAY';
+    return if !@{$events};
+
+    # Como los eventos están ordenados cronológicamente,
+    # el último elemento corresponde al BOS o CHoCH
+    # confirmado más reciente.
+    my $latest_event = $events->[-1];
+
+    return if !$latest_event;
+
+    my $anchor_index =
+        $latest_event->{volume_profile_index};
+
+    return if !defined $anchor_index;
+    return if $anchor_index < 0;
+    return if $anchor_index > $until_index;
+
+    # Conservamos también el evento estructural anterior.
+    my $previous_anchor_index;
+
+    if (@{$events} >= 2) {
+        $previous_anchor_index =
+            $events->[-2]{volume_profile_index};
+    }
+
+    my $raw_type =
+        $latest_event->{raw_type}
+        //
+        '';
+
+    my $anchor_type;
+
+    if ($raw_type =~ /^BOS_/) {
+        $anchor_type = 'BOS';
+    }
+    elsif ($raw_type =~ /^CHoCH_/) {
+        $anchor_type = 'CHOCH';
+    }
+
+    # Guardamos el estado para que pueda utilizarse
+    # posteriormente en la interfaz, depuración o VWAP por POC.
+    $self->{volume_profile_previous_anchor_index} =
+        $previous_anchor_index;
+
+    $self->{volume_profile_anchor_index} =
+        $anchor_index;
+
+    $self->{volume_profile_anchor_type} =
+        $anchor_type;
+
+    $self->{volume_profile_anchor_scope} =
+        $latest_event->{volume_profile_scope};
+
+    $self->{volume_profile_until_index} =
+        $until_index;
+
+    # El perfil comienza en la vela donde se confirmó
+    # la ruptura estructural y termina en la última
+    # vela actualmente disponible.
+    my $first = $anchor_index;
+    my $last  = $until_index;
+
+    return ($first, $last);
+}
+
+sub _resolve_volume_profile_range {
+    my ($self, %args) = @_;
+
+    my $market = $self->{market};
+
+    return if !$market;
+
+    my $visible_first = $args{visible_first};
+    my $visible_last  = $args{visible_last};
+
+    return if !defined $visible_first;
+    return if !defined $visible_last;
+
+    my $last_market_index = $market->last_index();
+
+    return if !defined $last_market_index;
+    return if $last_market_index < 0;
+
+    # ============================================================
+    # ÚLTIMA VELA PERMITIDA
+    # ============================================================
+
+    # En modo normal se permite utilizar hasta la última vela
+    # disponible en el mercado.
+    my $until_index = $last_market_index;
+
+    # Durante Replay, el límite debe ser la última vela revelada.
+    if (
+        $self->{replay_mode}
+        && defined $self->{replay_index}
+    ) {
+        $until_index = $self->{replay_index};
+    }
+
+    # Protección adicional por si replay_index queda fuera
+    # del rango disponible.
+    $until_index = $last_market_index
+        if $until_index > $last_market_index;
+
+    return if $until_index < 0;
+
+    $self->{volume_profile_until_index} =
+        $until_index;
+
+    # ============================================================
+    # MODO ACTUAL
+    # ============================================================
+
+    my $mode =
+        uc(
+            $self->{volume_profile_mode}
+            //
+            'VISIBLE'
+        );
+
+    my %valid_modes = map {
+        $_ => 1
+    } qw(
+        VISIBLE
+        SESSION
+        BOS_CHOCH
+        HISTORICAL
+    );
+
+    # Si por algún motivo aparece un modo inválido,
+    # se conserva el comportamiento anterior.
+    $mode = 'VISIBLE'
+        if !$valid_modes{$mode};
+
+    my ($first, $last);
+
+    # ============================================================
+    # VISIBLE RANGE VOLUME PROFILE
+    # ============================================================
+
+    if ($mode eq 'VISIBLE') {
+        $first = $visible_first;
+        $last  = $visible_last;
+
+        # Aunque el rango visible llegue más lejos,
+        # Replay impide usar velas todavía no reveladas.
+        $last = $until_index
+            if $last > $until_index;
+
+        $first = 0
+            if $first < 0;
+    }
+
+    # ============================================================
+    # VOLUME PROFILE POR SESIÓN
+    # ============================================================
+
+    elsif ($mode eq 'SESSION') {
+        $first =
+            $self->_resolve_volume_profile_session_start(
+                $until_index
+            );
+
+        $last = $until_index;
+    }
+
+    # ============================================================
+    # VOLUME PROFILE ANCLADO A BOS / CHoCH
+    # ============================================================
+
+    elsif ($mode eq 'BOS_CHOCH') {
+        ($first, $last) =
+            $self->_resolve_volume_profile_structure_range(
+                $until_index
+            );
+
+        # Si todavía no existe ningún BOS o CHoCH confirmado,
+        # se utiliza el rango histórico como respaldo.
+        if (
+            !defined $first
+            || !defined $last
+        ) {
+            ($first, $last) =
+                $self->_resolve_volume_profile_historical_range(
+                    $until_index
+                );
+
+            # Al utilizar el respaldo no existe un ancla
+            # estructural válida.
+            $self->{volume_profile_anchor_index} = undef;
+
+            $self->{volume_profile_previous_anchor_index} =
+                undef;
+
+            $self->{volume_profile_anchor_type} = undef;
+            $self->{volume_profile_anchor_scope} = undef;
+        }
+    }
+
+    # ============================================================
+    # VOLUME PROFILE HISTÓRICO
+    # ============================================================
+
+    elsif ($mode eq 'HISTORICAL') {
+        ($first, $last) =
+            $self->_resolve_volume_profile_historical_range(
+                $until_index
+            );
+    }
+
+    return if !defined $first;
+    return if !defined $last;
+
+    # ============================================================
+    # VALIDACIONES FINALES
+    # ============================================================
+
+    $first = int($first);
+    $last  = int($last);
+
+    $first = 0
+        if $first < 0;
+
+    $last = $until_index
+        if $last > $until_index;
+
+    $last = $last_market_index
+        if $last > $last_market_index;
+
+    return if $last < $first;
+
+    return ($first, $last, $mode);
+}
+
+
+sub _calculate_volume_profile {
+    my ($self,%args)=@_;
+
+    my $market=$self->{market};
+
+    return [] if !$market;
+
+    my $first=$args{first};
+    my $last =$args{last};
+
+     # El modo puede recibirse explícitamente o tomarse
+    # de la configuración actual del ChartEngine.
+     my $mode = uc(
+        $args{mode}
+        //
+        $self->{volume_profile_mode}
+        //
+        'VISIBLE'
+    );
+
+    return [] if !defined $first;
+    return [] if !defined $last;
+    return [] if $last<$first;
+
+    if (
+        defined $self->{volume_profile_cache}
+        && defined $self->{volume_profile_cache_first}
+        && defined $self->{volume_profile_cache_last}
+        && defined $self->{volume_profile_cache_mode}
+        && $self->{volume_profile_cache_first} == $first
+        && $self->{volume_profile_cache_last}  == $last
+        && $self->{volume_profile_cache_mode}  eq $mode
+    ) {
+        return $self->{volume_profile_cache};
+    }
+
+    my $low=9e99;
+    my $high=-9e99;
+
+    for my $i($first..$last){
+
+        my $bar=$market->get_candle($i);
+        next if !$bar;
+
+        $low=$bar->{low}
+            if $bar->{low}<$low;
+
+        $high=$bar->{high}
+            if $bar->{high}>$high;
+    }
+
+    return []
+        if $high<=$low;
+
+    my $rows=$self->{volume_profile_rows}||48;
+
+    my $step=($high-$low)/$rows;
+
+    $step=0.01 if $step<=0;
+
+    my @bins;
+
+    for(0..$rows-1){
+
+        push @bins,{
+            low=>$low+$_*$step,
+            high=>$low+($_+1)*$step,
+            volume=>0,
+        };
+    }
+
+    for my $i($first..$last){
+
+        my $bar=$market->get_candle($i);
+        next if !$bar;
+
+        my $vol=$bar->{volume}//0;
+        next if $vol<=0;
+
+        my $range=$bar->{high}-$bar->{low};
+
+        if($range<=0){
+
+            my $idx=int(
+                (($bar->{close}-$low)/$step)
+            );
+
+            $idx=0 if $idx<0;
+            $idx=$rows-1 if $idx>$rows-1;
+
+            $bins[$idx]{volume}+=$vol;
+
+            next;
+        }
+
+        for my $r(0..$rows-1){
+
+            my $a=$bins[$r]{low};
+            my $b=$bins[$r]{high};
+
+            my $overlap=
+                (
+                    ($bar->{high}<$a)
+                    ||
+                    ($bar->{low}>$b)
+                )
+                ?0
+                :(
+                    (
+                        ($bar->{high}<$b?$bar->{high}:$b)
+                        -
+                        ($bar->{low}>$a?$bar->{low}:$a)
+                    )
+                );
+
+            next if $overlap<=0;
+
+            my $weight=
+                $overlap/$range;
+
+            $bins[$r]{volume}
+                +=$vol*$weight;
+        }
+    }
+
+    my $max_volume=0;
+
+    for(@bins){
+
+        $max_volume=$_-> {volume}
+            if $_->{volume}>$max_volume;
+    }
+
+    my $poc_index=0;
+
+    for my $i(0..$#bins){
+
+        if(
+            $bins[$i]{volume}
+            >=
+            $bins[$poc_index]{volume}
+        ){
+            $poc_index=$i;
+        }
+    }
+
+        my $total_volume = 0;
+
+    $total_volume += $_->{volume}
+        for @bins;
+
+    my $target_volume =
+        $total_volume
+        *
+        ($self->{volume_profile_value_area} || 0.70);
+
+    my $accumulated =
+        $bins[$poc_index]{volume};
+
+    my $vah = $poc_index;
+    my $val = $poc_index;
+
+    while($accumulated < $target_volume){
+
+        my $up_volume =
+            ($vah < $#bins)
+                ? $bins[$vah+1]{volume}
+                : -1;
+
+        my $down_volume =
+            ($val > 0)
+                ? $bins[$val-1]{volume}
+                : -1;
+
+        if($up_volume >= $down_volume){
+
+            last
+                if $vah >= $#bins;
+
+            $vah++;
+
+            $accumulated +=
+                $bins[$vah]{volume};
+
+        }
+        else{
+
+            last
+                if $val <= 0;
+
+            $val--;
+
+            $accumulated +=
+                $bins[$val]{volume};
+
+        }
+
+    }
+
+    for my $i(0..$#bins){
+
+        $bins[$i]{inside_value_area} =
+            ($i >= $val && $i <= $vah)
+            ? 1
+            : 0;
+
+    }
+
+       $self->{volume_profile_cache} = \@bins;
+
+    $self->{volume_profile_cache_first} = $first;
+    $self->{volume_profile_cache_last}  = $last;
+    $self->{volume_profile_cache_mode}  = $mode;
+
+    $self->{volume_profile_poc} =
+        $poc_index;
+
+    $self->{volume_profile_vah} =
+        $vah;
+
+    $self->{volume_profile_val} =
+        $val;
+
+    $self->{volume_profile_max} =
+        $max_volume;
+
+    return \@bins;
+}
+
+
+sub _draw_volume_profile {
+    my ($self, %args) = @_;
+
+    my $canvas      = $args{canvas};
+    my $start       = $args{start};
+    my $end         = $args{end};
+    my $state       = $args{state};
+    my $price_panel = $args{price_panel};
+
+    return if !$canvas;
+    return if !$state;
+    return if !$price_panel;
+
+    # ============================================================
+    # RESOLVER EL RANGO SEGÚN EL MODO DEL VOLUME PROFILE
+    # ============================================================
+
+    my ($profile_first, $profile_last, $profile_mode) =
+        $self->_resolve_volume_profile_range(
+            visible_first => $start,
+            visible_last  => $end,
+        );
+
+    return if !defined $profile_first;
+    return if !defined $profile_last;
+    return if !defined $profile_mode;
+
+    # Calculamos el perfil utilizando el rango resuelto.
+    # Ya no se utiliza obligatoriamente el rango visible.
+    my $profile =
+        $self->_calculate_volume_profile(
+            first => $profile_first,
+            last  => $profile_last,
+            mode  => $profile_mode,
+        );
+
+    return if !$profile;
+    return if ref($profile) ne 'ARRAY';
+    return if !@{$profile};
+
+    my $scale = $price_panel->{scale};
+
+    return if !$scale;
+
+    my $right =
+        $state->{right};
+
+    my $price_height =
+        $state->{price_h};
+
+    return if !defined $right;
+    return if !defined $price_height;
+
+    # Ancho máximo del histograma dibujado
+    # en el lado derecho del gráfico.
+    my $max_width = 90;
+
+    my $max_volume =
+        $self->{volume_profile_max}
+        //
+        1;
+
+    $max_volume = 1
+        if $max_volume <= 0;
+
+    # ============================================================
+    # DIBUJO DE LAS FILAS DEL PERFIL
+    # ============================================================
+
+    for my $i (0 .. $#{$profile}) {
+        my $row = $profile->[$i];
+
+        next if !$row;
+        next if ref($row) ne 'HASH';
+        next if !defined $row->{volume};
+        next if $row->{volume} <= 0;
+
+        my $y1 =
+            $scale->price_to_y(
+                $row->{high},
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $price_height,
+            );
+
+        my $y2 =
+            $scale->price_to_y(
+                $row->{low},
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $price_height,
+            );
+
+        next if !defined $y1;
+        next if !defined $y2;
+
+        # No dibujamos filas completamente fuera
+        # del panel visible de precios.
+        next if $y2 < 0;
+        next if $y1 > $price_height;
+
+        my $width =
+            (
+                $row->{volume}
+                /
+                $max_volume
+            )
+            *
+            $max_width;
+
+        $width = 1
+            if $width < 1;
+
+        # Azul para el área de valor y azul claro
+        # para las filas que quedan fuera.
+        my $color =
+            $row->{inside_value_area}
+            ? '#2962ff'
+            : '#9db7e5';
+
+        # El POC se representa en color naranja.
+        if (
+            defined $self->{volume_profile_poc}
+            &&
+            $i == $self->{volume_profile_poc}
+        ) {
+            $color = '#ff9800';
+        }
+
+        $canvas->createRectangle(
+            $right - $width,
+            $y1,
+            $right,
+            $y2,
+
+            -fill    => $color,
+            -outline => $color,
+        );
+    }
+
+    # ============================================================
+    # LÍNEA DEL POC
+    # ============================================================
+
+    if (
+        defined $self->{volume_profile_poc}
+        &&
+        defined $profile->[
+            $self->{volume_profile_poc}
+        ]
+    ) {
+        my $row =
+            $profile->[
+                $self->{volume_profile_poc}
+            ];
+
+        my $price =
+            (
+                $row->{high}
+                +
+                $row->{low}
+            )
+            /
+            2;
+
+        my $y =
+            $scale->price_to_y(
+                $price,
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $price_height,
+            );
+
+        if (
+            defined $y
+            &&
+            $y >= 0
+            &&
+            $y <= $price_height
+        ) {
+            $canvas->createLine(
+                $right - 92,
+                $y,
+                $right,
+                $y,
+
+                -fill  => '#ff9800',
+                -width => 2,
+            );
+
+            $canvas->createText(
+                $right - 95,
+                $y,
+
+                -anchor => 'e',
+                -fill   => '#ff9800',
+                -font   => ['Arial', 8, 'bold'],
+                -text   => 'POC',
+            );
+        }
+    }
+
+    # ============================================================
+    # LÍNEAS VAH Y VAL
+    # ============================================================
+
+    for my $pair (
+        [
+            $self->{volume_profile_vah},
+            '#43a047',
+            'VAH',
+        ],
+        [
+            $self->{volume_profile_val},
+            '#e53935',
+            'VAL',
+        ],
+    ) {
+        my ($index, $color, $text) =
+            @{$pair};
+
+        next if !defined $index;
+        next if !defined $profile->[$index];
+
+        my $row =
+            $profile->[$index];
+
+        my $price;
+
+        if ($text eq 'VAH') {
+            $price = $row->{high};
+        }
+        else {
+            $price = $row->{low};
+        }
+
+        my $y =
+            $scale->price_to_y(
+                $price,
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $price_height,
+            );
+
+        next if !defined $y;
+        next if $y < 0;
+        next if $y > $price_height;
+
+        $canvas->createLine(
+            $right - 92,
+            $y,
+            $right,
+            $y,
+
+            -fill => $color,
+            -dash => [4, 4],
+        );
+
+        $canvas->createText(
+            $right - 95,
+            $y,
+
+            -anchor => 'e',
+            -text   => $text,
+            -fill   => $color,
+            -font   => ['Arial', 8, 'bold'],
+        );
+    }
+}
+
+sub invalidate_volume_profile_cache {
+    my ($self) = @_;
+
+    # Elimina el histograma calculado anteriormente.
+    $self->{volume_profile_cache} = undef;
+
+    # Elimina el rango de velas asociado al caché anterior.
+    $self->{volume_profile_cache_first} = undef;
+    $self->{volume_profile_cache_last}  = undef;
+
+    # Elimina el modo con el cual se construyó el caché.
+    # Esto evita reutilizar, por ejemplo, un perfil VISIBLE
+    # cuando el usuario cambió al modo SESSION o BOS_CHOCH.
+    $self->{volume_profile_cache_mode} = undef;
+
+    # Elimina los niveles calculados del perfil anterior.
+    $self->{volume_profile_poc} = undef;
+    $self->{volume_profile_vah} = undef;
+    $self->{volume_profile_val} = undef;
+    $self->{volume_profile_max} = undef;
 }
 
 

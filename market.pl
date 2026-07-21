@@ -17,7 +17,7 @@ use Market::Indicators::SMC_Structures;
 use Market::ChartEngine;
 use Market::Debug::LiquidityDebug;
 
-my $csv = $ARGV[0] || "$FindBin::Bin/2026_07_13.csv";
+my $csv = $ARGV[0] || "$FindBin::Bin/2026_07_20.csv";
 print "Cargando datos desde '$csv'...\n";
 
 my $dataset = sml->load_csv($csv);

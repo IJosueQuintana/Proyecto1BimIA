@@ -404,16 +404,28 @@ sub draw_fvg {
         # ======================================================
         # MODO NORMAL
         #
-        # Mostrar los últimos FVG detectados, aunque después
-        # hayan sido mitigados.
+        # Se dibujan solamente los FVG que todavía están activos.
+        # Cuando una vela o una mecha toca la banda, el detector
+        # marca el FVG como mitigado y deja de mostrarse.
         # ======================================================
         @fvg_to_draw = grep {
             my $fvg = $_;
 
             $fvg
             && ref($fvg) eq 'HASH'
+
+            # No mostrar FVG mitigados.
+            && !$fvg->{mitigated}
+
+            # Compatibilidad con FVG antiguos que quizá no tengan
+            # todavía definida la propiedad active.
             && (
-                   ($fvg->{type} // '') eq 'BULLISH_FVG'
+                !defined $fvg->{active}
+                || $fvg->{active}
+            )
+
+            && (
+                ($fvg->{type} // '') eq 'BULLISH_FVG'
                 || ($fvg->{type} // '') eq 'BEARISH_FVG'
             )
         } @$items;
@@ -555,25 +567,51 @@ sub draw_order_blocks {
 
     return if !$items || ref($items) ne 'ARRAY';
 
-    my $scale = $price_panel->{scale};
+    my $scale       = $price_panel->{scale};
     my $right_limit = $state->{right} - 5;
 
     for my $ob (@$items) {
+
+        next if !$ob;
+        next if ref($ob) ne 'HASH';
+
+        # ======================================================
+        # SOLO ORDER BLOCKS ACTIVOS
+        #
+        # Cuando el precio atraviesa completamente el extremo
+        # contrario del OB, deja de mostrarse.
+        # ======================================================
+        
 
         next if !defined $ob->{index};
         next if !defined $ob->{break_index};
         next if !defined $ob->{top};
         next if !defined $ob->{bottom};
 
+        # El evento debe existir dentro o antes del rango visible.
         next if $ob->{break_index} < $start;
         next if $ob->{index} > $end;
 
-        my $x1 = $x_of->($ob->{index} - $start);
-        my $x2 = $x_of->($ob->{break_index} - $start);
+        my $right_index = defined $ob->{right_index}
+            ? $ob->{right_index}
+            : $ob->{break_index};
 
-        $x1 = $state->{left} if $x1 < $state->{left};
-        $x2 = $right_limit if $x2 > $right_limit;
-        $x2 = $x1 + 25 if $x2 <= $x1;
+        my $x1 = $x_of->(
+            $ob->{index} - $start
+        );
+
+        my $x2 = $x_of->(
+            $right_index - $start
+        );
+
+        $x1 = $state->{left}
+            if $x1 < $state->{left};
+
+        $x2 = $right_limit
+            if $x2 > $right_limit;
+
+        $x2 = $x1 + 25
+            if $x2 <= $x1;
 
         my $y_top = $scale->price_to_y(
             $ob->{top},
@@ -593,27 +631,29 @@ sub draw_order_blocks {
 
         my ($color, $txt);
 
-        if ($ob->{invalidated}) {
-            $color = '#808080';
-        }
-        elsif ($ob->{type} eq 'BULLISH_OB') {
+        if (($ob->{type} // '') eq 'BULLISH_OB') {
             $color = '#2962ff';
+            $txt   = 'Bull OB';
+        }
+        elsif (($ob->{type} // '') eq 'BEARISH_OB') {
+            $color = '#f23645';
+            $txt   = 'Bear OB';
         }
         else {
-            $color = '#f23645';
+            next;
         }
 
-        $txt = $ob->{type} eq 'BULLISH_OB' ? 'Bull OB' : 'Bear OB';
-
-        # Caja limpia
+        # Banda principal del Order Block.
         $c->createRectangle(
-            $x1, $y_top,
-            $x2, $y_bottom,
+            $x1,
+            $y_top,
+            $x2,
+            $y_bottom,
             -outline => $color,
             -width   => 1,
         );
 
-        # Línea central
+        # Línea media de la zona.
         $c->createLine(
             $x1,
             ($y_top + $y_bottom) / 2,
