@@ -293,10 +293,12 @@ print "========================================\n";
             all_pivots  => \@usable_pivots,
             candles     => $candles,
             atr         => $atr,
-
             # La validación termina en el borde visible,
             # no necesariamente en la última vela total.
             until_index => $visible_end,
+            visible_start => $visible_start,
+            visible_end   => $visible_end,
+            
         );
 
     my @bearish =
@@ -307,6 +309,8 @@ print "========================================\n";
             candles     => $candles,
             atr         => $atr,
             until_index => $visible_end,
+            visible_start => $visible_start,
+            visible_end   => $visible_end,
         );
 
     my @all =
@@ -333,9 +337,11 @@ print "========================================\n";
         } @all;
 
     my @trendlines =
-        $self->_select_visible_lines(
-            lines => \@all,
-        );
+    $self->_select_visible_lines(
+        lines         => \@all,
+        visible_start => $visible_start,
+        visible_end   => $visible_end,
+    );
 
     return {
         trendlines => \@trendlines,
@@ -397,7 +403,12 @@ sub _generate_candidates {
     my $until_index =
         $args{until_index};
 
-    # Ahora necesitamos al menos tres pivotes del mismo tipo.
+    my $visible_start =
+        $args{visible_start};
+
+    my $visible_end =
+        $args{visible_end};
+
     return ()
         if @$pivots < 3;
 
@@ -438,16 +449,18 @@ sub _generate_candidates {
                     < $self->{min_touch_distance};
 
                 my $line =
-                    $self->_build_line(
-                        type        => $type,
-                        first       => $first,
-                        second      => $second,
-                        third       => $third,
-                        pivots      => $all_pivots,
-                        candles     => $candles,
-                        atr         => $atr,
-                        until_index => $until_index,
-                    );
+                $self->_build_line(
+                    type          => $type,
+                    first         => $first,
+                    second        => $second,
+                    third         => $third,
+                    pivots        => $all_pivots,
+                    candles       => $candles,
+                    atr           => $atr,
+                    until_index   => $until_index,
+                    visible_start => $visible_start,
+                    visible_end   => $visible_end,
+                );
 
                 next if !$line;
                 next if !$line->{valid};
@@ -499,6 +512,24 @@ sub _build_line {
 
     my $until_index =
         $args{until_index};
+    
+    my $visible_start =
+        defined $args{visible_start}
+        ? $args{visible_start}
+        : $first->{index};
+
+    my $visible_end =
+        defined $args{visible_end}
+        ? $args{visible_end}
+        : $until_index;
+
+    my $visible_bars =
+        $visible_end
+        - $visible_start
+        + 1;
+
+    $visible_bars = 1
+        if $visible_bars < 1;
 
     return undef if !$first;
     return undef if !$second;
@@ -588,6 +619,66 @@ sub _build_line {
         status => 'CONFIRMED',
         score  => 0,
     };
+
+    #$line
+    my @anchor_indices = (
+        $first->{index},
+        $second->{index},
+        $third->{index},
+    );
+
+    my $visible_anchor_count = 0;
+
+    for my $index (@anchor_indices) {
+        if (
+            $index >= $visible_start
+            && $index <= $visible_end
+        ) {
+            $visible_anchor_count++;
+        }
+    }
+
+    my $distance_from_visible;
+
+    if ($third->{index} < $visible_start) {
+        $distance_from_visible =
+            $visible_start
+            - $third->{index};
+    }
+    elsif ($third->{index} > $visible_end) {
+        $distance_from_visible =
+            $third->{index}
+            - $visible_end;
+    }
+    else {
+        $distance_from_visible = 0;
+    }
+
+    $line->{visible_start} =
+        $visible_start;
+
+    $line->{visible_end} =
+        $visible_end;
+
+    $line->{visible_anchor_count} =
+        $visible_anchor_count;
+
+    $line->{distance_from_visible} =
+        $distance_from_visible;
+
+    $line->{visible_relevance} =
+        ($visible_anchor_count * 30)
+        - int(
+            30
+            * $distance_from_visible
+            / $visible_bars
+        );
+
+    $line->{visible_relevance} = 0
+        if $line->{visible_relevance} < 0;
+
+    $line->{visible_relevance} = 100
+        if $line->{visible_relevance} > 100;
 
     # Verifica que cada uno de los tres pivotes esté suficientemente
     # cerca de la línea ajustada.
@@ -1166,15 +1257,38 @@ sub _select_visible_lines {
     my $lines =
         $args{lines} || [];
 
+    my $visible_start =
+        $args{visible_start};
+
+    my $visible_end =
+        $args{visible_end};
+
+    return ()
+        if !defined $visible_start;
+
+    return ()
+        if !defined $visible_end;
+
+    my $visible_bars =
+        $visible_end
+        - $visible_start
+        + 1;
+
+    $visible_bars = 1
+        if $visible_bars < 1;
+
+    # Una línea confirmada antes de la pantalla puede seguir siendo
+    # relevante, pero no si está demasiado lejos.
+    my $maximum_confirmation_distance =
+        int($visible_bars * 1.50);
+
+    $maximum_confirmation_distance = 100
+        if $maximum_confirmation_distance < 100;
+
     my @selected;
 
     for my $type ('BULLISH', 'BEARISH') {
 
-        # Únicamente líneas:
-        # - de la dirección actual;
-        # - confirmadas;
-        # - no rotas;
-        # - con mínimo 3 contactos.
         my @confirmed =
             grep {
                    ($_->{type} // '') eq $type
@@ -1182,30 +1296,102 @@ sub _select_visible_lines {
                 && !$_->{broken}
                 && ($_->{touches} // 0)
                     >= $self->{confirmed_touches}
+
+                # Debe haberse confirmado dentro de la pantalla
+                # o relativamente cerca de su borde izquierdo.
+                && (
+                       ($_->{third_index} // -1)
+                       >= (
+                           $visible_start
+                           - $maximum_confirmation_distance
+                       )
+                   )
+
+                && (
+                       ($_->{third_index} // -1)
+                       <= $visible_end
+                   )
             } @$lines;
+
+        # Añadimos una puntuación específica para la ventana visible.
+        for my $line (@confirmed) {
+
+            my $third_index =
+                   $line->{third_index}
+                // $line->{confirmation_index}
+                // $line->{second_index}
+                // $line->{start_index};
+
+            my $distance_to_right =
+                $visible_end
+                - $third_index;
+
+            $distance_to_right = 0
+                if $distance_to_right < 0;
+
+            my $recency_visible =
+                40
+                - int(
+                    40
+                    * $distance_to_right
+                    / (
+                        $maximum_confirmation_distance
+                        || 1
+                    )
+                );
+
+            $recency_visible = 0
+                if $recency_visible < 0;
+
+            my $anchors_visible =
+                $line->{visible_anchor_count}
+                // 0;
+
+            my $anchor_score =
+                $anchors_visible * 25;
+
+            $anchor_score = 50
+                if $anchor_score > 50;
+
+            my $base_score =
+                $line->{score}
+                // 0;
+
+            $line->{visible_score} =
+                  ($base_score * 0.30)
+                + $recency_visible
+                + $anchor_score;
+        }
 
         @confirmed =
             sort {
-                   ($b->{score} // 0) <=> ($a->{score} // 0)
-                || ($b->{touches} // 0)
-                    <=> ($a->{touches} // 0)
-                || ($b->{second_index} // 0)
-                    <=> ($a->{second_index} // 0)
+                   ($b->{visible_score} // 0)
+                        <=> ($a->{visible_score} // 0)
+
+                || ($b->{visible_anchor_count} // 0)
+                        <=> ($a->{visible_anchor_count} // 0)
+
+                || ($b->{third_index} // 0)
+                        <=> ($a->{third_index} // 0)
+
+                || ($b->{score} // 0)
+                        <=> ($a->{score} // 0)
             } @confirmed;
 
         my $maximum =
             $self->{max_lines_per_side}
             // 1;
 
+        my $added = 0;
+
         for my $line (@confirmed) {
             last
-                if scalar(
-                    grep {
-                        ($_->{type} // '') eq $type
-                    } @selected
-                ) >= $maximum;
+                if $added >= $maximum;
 
-            push @selected, $line;
+            push @selected,
+                $line;
+
+            $added++;
         }
     }
 

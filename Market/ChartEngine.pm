@@ -1271,6 +1271,7 @@ sub update_trend_channel {
         ) {
             print join(
                 ' ',
+
                 'Tipo='
                     . ($line->{type} // 'N/A'),
 
@@ -1280,6 +1281,21 @@ sub update_trend_channel {
                 'Score='
                     . ($line->{score} // 0),
 
+                'ScoreVisible='
+                    . sprintf(
+                        '%.1f',
+                        $line->{visible_score} // 0
+                    ),
+
+                'AnclasVisibles='
+                    . ($line->{visible_anchor_count} // 0),
+
+                'RelevanciaVisible='
+                    . sprintf(
+                        '%.1f',
+                        $line->{visible_relevance} // 0
+                    ),
+
                 'Inicio='
                     . ($line->{start_index} // 'N/A'),
 
@@ -1288,12 +1304,6 @@ sub update_trend_channel {
 
                 'Tercero='
                     . ($line->{third_index} // 'N/A'),
-
-                'ErrorMedio='
-                    . sprintf(
-                        '%.4f',
-                        $line->{fit_error} // 0
-                    ),
             ) . "\n";
         }
 
