@@ -11,6 +11,8 @@ use Market::Overlays::SMC_Structures;
 use Market::Indicators::Liquidity;
 use Market::Indicators::SMC_Structures;
 use Market::Overlays::Liquidity;
+use Market::Indicators::TrendChannel;
+use Market::Overlays::TrendChannel;
 
 sub new {
     my ($class, %args) = @_;
@@ -101,6 +103,29 @@ sub new {
 
         show_fvg          => 0,
         show_order_blocks => 0,
+
+        # ============================================================
+        # TRENDLINE Y CHANNEL AUTOMÁTICOS
+        # ============================================================
+
+        # Temporalmente iniciamos Trendline visible para comprobar
+        # que la detección y el dibujo funcionan correctamente.
+        show_trendlines => 1,
+
+        # Se habilitará después de validar las Trendlines.
+        show_channels => 0,
+
+        # Mostrar marcadores en cada contacto confirmado.
+        show_trendline_touches => 1,
+
+        # Mostrar nombre, estado, contactos y score.
+        show_trendline_labels => 1,
+
+        trend_channel_result => {
+            trendlines => [],
+            channels   => [],
+        },
+        trend_channel_cache_key => undef,
 
         # ============================================================
         # ANCHORED VWAP
@@ -274,6 +299,25 @@ sub new {
         liquidity_overlay => Market::Overlays::Liquidity->new(
             liq_result => undef,
         ),
+
+        trend_channel_engine =>
+            Market::Indicators::TrendChannel->new(
+                pivot_lookback       => 30,
+                min_pivot_distance   => 5,
+                min_touch_distance   => 5,
+                tolerance_atr_mult   => 0.30,
+                break_atr_mult       => 0.20,
+                break_confirm_bars   => 1,
+                confirmed_touches    => 3,
+                max_lines_per_side   => 1,
+            ),
+
+        trend_channel_overlay =>
+            Market::Overlays::TrendChannel->new(
+                result       => undef,
+                show_touches => 1,
+                show_labels  => 1,
+            ),
 
         smc_cache_key     => undef,
         last_liq_result   => undef,
@@ -930,11 +974,24 @@ sub update_smc_overlay {
 
     my $atr_values = $indicators->get('ATR');
 
-    my $liq_result = $self->{liquidity_engine}->calculate_until(
-        $market->get_slice(0, $until_index),
-        $atr_values,
-        $until_index
-    );
+    # my $liq_result = $self->{liquidity_engine}->calculate_until(
+    #     $market->get_slice(0, $until_index),
+    #     $atr_values,
+    #     $until_index
+    # );
+
+    my $candles_until =
+        $market->get_slice(
+            0,
+            $until_index
+        );
+
+    my $liq_result =
+        $self->{liquidity_engine}->calculate_until(
+            $candles_until,
+            $atr_values,
+            $until_index,
+        );
 
         my $smc_external = $self->{smc_external_engine}->calculate(
         $liq_result->{external_structure},
@@ -980,6 +1037,80 @@ sub update_smc_overlay {
     external_lows  => \%external_lows,  
     );
 
+        # ============================================================
+    # TRENDLINE AUTOMÁTICA EXTERNA
+    #
+    # Utiliza exclusivamente la estructura swing externa:
+    # - mínimos externos para líneas alcistas;
+    # - máximos externos para líneas bajistas.
+    #
+    # until_index garantiza compatibilidad con Replay.
+    # ============================================================
+
+    # my $trend_channel_result =
+    #     $self->{trend_channel_engine}->calculate(
+    #         pivots =>
+    #             $liq_result->{external_structure}
+    #             || [],
+
+    #         candles =>
+    #             $candles_until
+    #             || [],
+
+    #         atr =>
+    #             $atr_values
+    #             || [],
+
+    #         until_index =>
+    #             $until_index,
+    #     );
+
+    # $self->{trend_channel_result} =
+    #     $trend_channel_result
+    #     || {
+    #         trendlines => [],
+    #         channels   => [],
+    #     };
+
+    #     # Auditoria temporal.
+    #     if ($self->{show_trendlines}) {
+    #     my $trendlines =
+    #         $self->{trend_channel_result}{trendlines}
+    #         || [];
+
+    #     print "\n";
+    #     print "========================================\n";
+    #     print "AUDITORIA TRENDLINES\n";
+    #     print "Pivotes externos: "
+    #         . scalar(
+    #             @{$liq_result->{external_structure} || []}
+    #         )
+    #         . "\n";
+
+    #     print "Trendlines encontradas: "
+    #         . scalar(@$trendlines)
+    #         . "\n";
+
+    #     for my $line (@$trendlines) {
+    #         next if !$line;
+
+    #         print "Tipo=$line->{type} ";
+    #         print "inicio=$line->{start_index} ";
+    #         print "segundo=$line->{second_index} ";
+    #         print "toques=$line->{touches} ";
+    #         print "activa=$line->{active} ";
+    #         print "rota=$line->{broken} ";
+    #         print "score="
+    #             . sprintf(
+    #                 '%.2f',
+    #                 $line->{score} // 0
+    #             )
+    #             . "\n";
+    #     }
+
+    #     print "========================================\n";
+    # }
+
     $self->{last_liq_result}          = $liq_result;
     $self->{last_smc_external}        = $smc_external;
     $self->{last_smc_internal_visual} = $smc_internal_visual;
@@ -993,7 +1124,208 @@ sub update_smc_overlay {
     $self->{liquidity_overlay}->set_result($liq_result);
     $self->{smc_overlay}->set_result($smc_external);
 
+    # $self->{trend_channel_overlay}->set_result(
+    #     $self->{trend_channel_result}
+    # );
+
     $self->{smc_cache_key} = $cache_key;
+}
+
+sub update_trend_channel {
+    my (
+        $self,
+        $visible_start,
+        $visible_end,
+        $until_index
+    ) = @_;
+
+    return if !$self->{trend_channel_engine};
+    return if !$self->{trend_channel_overlay};
+    return if !$self->{last_liq_result};
+
+    $visible_start = 0
+        if !defined $visible_start
+        || $visible_start < 0;
+
+    $visible_end = $until_index
+        if !defined $visible_end
+        || $visible_end > $until_index;
+
+    return
+        if $visible_end <= $visible_start;
+
+    my $cache_key =
+        join(
+            ':',
+            $self->{tf} // 1,
+            $visible_start,
+            $visible_end,
+            $until_index,
+            $self->{trend_channel_engine}
+                ->{confirmed_touches} // 3,
+            $self->{trend_channel_engine}
+                ->{tolerance_atr_mult} // 0.30,
+        );
+
+    return
+        if defined $self->{trend_channel_cache_key}
+        && $self->{trend_channel_cache_key}
+            eq $cache_key;
+
+    my $market =
+        $self->{market};
+
+    my $indicators =
+        $self->{indicators};
+
+    return if !$market;
+    return if !$indicators;
+
+    $indicators->update_until(
+        $market,
+        $until_index
+    );
+
+    my $atr_values =
+        $indicators->get('ATR')
+        || [];
+
+    # El indicador utiliza índices globales, por eso las velas
+    # se solicitan desde cero hasta la vela permitida.
+    my $candles =
+        $market->get_slice(
+            0,
+            $until_index
+        );
+
+    my $result =
+        $self->{trend_channel_engine}->calculate(
+            pivots =>
+                $self->{last_liq_result}
+                    ->{external_structure}
+                || [],
+
+            candles =>
+                $candles
+                || [],
+
+            atr =>
+                $atr_values,
+
+            until_index =>
+                $until_index,
+
+            visible_start =>
+                $visible_start,
+
+            visible_end =>
+                $visible_end,
+        )
+        || {
+        trendlines => [],
+        candidates => [],
+        confirmed  => [],
+        broken     => [],
+        channels   => [],
+        audit      => {},
+    };
+        
+        # auditoria
+        if ($self->{show_trendlines}) {
+        my $audit =
+            $result->{audit}
+            || {};
+
+        print "\n";
+        print "========================================\n";
+        print "TRENDLINE SEGUN CAMPO VISIBLE\n";
+
+        print "Rango visible: "
+            . ($audit->{visible_start} // 0)
+            . " - "
+            . ($audit->{visible_end} // 0)
+            . "\n";
+
+        print "Inicio de análisis: "
+            . ($audit->{analysis_start} // 0)
+            . "\n";
+
+        print "Pivotes usados: "
+            . ($audit->{pivots_used} // 0)
+            . "\n";
+
+        print "Confirmadas: "
+            . scalar(
+                @{$result->{confirmed} || []}
+            )
+            . "\n";
+
+        print "Visibles: "
+            . scalar(
+                @{$result->{trendlines} || []}
+            )
+            . "\n";
+
+        for my $line (
+            @{$result->{trendlines} || []}
+        ) {
+            print join(
+                ' ',
+                'Tipo='
+                    . ($line->{type} // 'N/A'),
+
+                'Toques='
+                    . ($line->{touches} // 0),
+
+                'Score='
+                    . ($line->{score} // 0),
+
+                'Inicio='
+                    . ($line->{start_index} // 'N/A'),
+
+                'Segundo='
+                    . ($line->{second_index} // 'N/A'),
+
+                'Tercero='
+                    . ($line->{third_index} // 'N/A'),
+
+                'ErrorMedio='
+                    . sprintf(
+                        '%.4f',
+                        $line->{fit_error} // 0
+                    ),
+            ) . "\n";
+        }
+
+        print "========================================\n";
+    }
+
+    $self->{trend_channel_result} =
+        $result;
+
+    $self->{trend_channel_overlay}->set_result(
+        $self->{trend_channel_result}
+    );
+
+    $self->{trend_channel_cache_key} =
+        $cache_key;
+
+    $self->{trend_channel_result} =
+        $result
+        || {
+            trendlines => [],
+            candidates => [],
+            confirmed  => [],
+            broken     => [],
+            channels   => [],
+        };
+
+    $self->{trend_channel_overlay}->set_result(
+        $self->{trend_channel_result}
+    );
+
+    $self->{trend_channel_cache_key} =
+        $cache_key;
 }
 
 sub draw {
@@ -1134,9 +1466,23 @@ sub draw {
     # FVG y Order Blocks deben poder calcularse y mostrarse
     # independientemente de que el ZigZag esté visible.
     || $self->{show_fvg}
-    || $self->{show_order_blocks};
+    || $self->{show_order_blocks}
+
+    # Trendline y Channel necesitan pivotes externos.
+    || $self->{show_trendlines}
+    || $self->{show_channels};
 
     $self->update_smc_overlay($calc_until) if $needs_smc_or_liquidity;
+    if (
+        $self->{show_trendlines}
+        || $self->{show_channels}
+    ) {
+        $self->update_trend_channel(
+            $start,
+            $end,
+            $calc_until,
+        );
+    }
 
         # ========================================================
         # VOLUME PROFILE
@@ -1255,6 +1601,30 @@ sub draw {
         $self->{price_panel},
         $self->{last_smc_external}->{order_blocks} || [],
     );
+    }
+
+    # ============================================================
+    # TRENDLINES AUTOMÁTICAS
+    # ============================================================
+
+    if ($self->{show_trendlines}) {
+        $self->{trend_channel_overlay}->draw_trendlines(
+            $c,
+            $start,
+            $end,
+            $x_of,
+            \%state,
+            $self->{price_panel},
+
+            result =>
+                $self->{trend_channel_result},
+
+            show_touches =>
+                $self->{show_trendline_touches},
+
+            show_labels =>
+                $self->{show_trendline_labels},
+        );
     }
 
     if (
