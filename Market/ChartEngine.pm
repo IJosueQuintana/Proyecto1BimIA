@@ -64,6 +64,7 @@ sub new {
 
                 fvg          => 0,
                 order_blocks => 0,
+                
             },
 
             external => {
@@ -79,6 +80,7 @@ sub new {
 
                 fvg          => 0,
                 order_blocks => 0,
+                 supply_demand   => 0,
             },
 
             # EQH/EQL no son internos ni externos.
@@ -101,6 +103,7 @@ sub new {
 
         show_fvg          => 0,
         show_order_blocks => 0,
+        show_supply_demand => 0,
 
         # ============================================================
         # ANCHORED VWAP
@@ -247,6 +250,7 @@ sub new {
         eq_tolerance => 0.10,
 
         external_swing_len   => 150,
+        supply_demand_require_volume => 0,
     ),
 
         smc_external_engine => Market::Indicators::SMC_Structures->new(
@@ -291,6 +295,17 @@ sub new {
         replay_index     => undef,
         replay_after     => undef,
         replay_speed => 300,
+        # Indica que el Replay automático está ejecutándose.
+        replay_playing => 0,
+
+        # Durante Play, los indicadores estructurales pesados
+        # se actualizan cada N velas.
+        #
+        # Las velas siguen avanzando una por una.
+        replay_indicator_stride => 5,
+
+        # Última vela donde se hizo un cálculo estructural completo.
+        replay_last_heavy_index => undef,
         debug_replay => 0,
 
         audit_printed => 0,
@@ -576,6 +591,7 @@ sub run {
         }
 
         $self->{smc_cache_key} = undef;
+        $self->{replay_last_heavy_index} = undef;
         $self->draw();
     });
 
@@ -801,6 +817,7 @@ sub set_timeframe {
     $self->_replay_apply_window();
     }
     $self->{smc_cache_key} = undef;
+    $self->{replay_last_heavy_index} = undef;
     $self->{indicators}->reset_all();
     $self->{indicators}->update_last($self->{market});
     $self->{locked_index} = undef;
@@ -854,6 +871,41 @@ sub update_smc_overlay {
     my ($self, $until_index) = @_;
 
     return if !defined $until_index;
+
+        # ==========================================================
+    # OPTIMIZACIÓN DEL REPLAY AUTOMÁTICO
+    #
+    # Durante Play no reconstruimos toda la estructura en cada
+    # vela. Reutilizamos el último resultado durante unas pocas
+    # velas y actualizamos periódicamente.
+    #
+    # Al pausar o avanzar manualmente, replay_playing será 0 y
+    # el cálculo se realizará exactamente en la vela solicitada.
+    # ==========================================================
+    if (
+        $self->{replay_mode}
+        &&
+        $self->{replay_playing}
+        &&
+        defined $self->{replay_last_heavy_index}
+    ) {
+        my $stride =
+            $self->{replay_indicator_stride}
+            // 5;
+
+        $stride = 1
+            if $stride < 1;
+
+        my $distance =
+            abs(
+                $until_index
+                -
+                $self->{replay_last_heavy_index}
+            );
+
+        return
+            if $distance < $stride;
+    }
 
     my $market     = $self->{market};
     my $indicators = $self->{indicators};
@@ -921,6 +973,25 @@ sub update_smc_overlay {
 
         # Estructura externa.
         $self->{external_swing_len} // 150,
+                $self->{liquidity_engine}
+            ->{supply_demand_volume_lookback}
+            // 20,
+
+        $self->{liquidity_engine}
+            ->{supply_demand_volume_mult}
+            // 1.5,
+
+        $self->{liquidity_engine}
+            ->{supply_demand_range_atr_min}
+            // 0.80,
+
+        $self->{liquidity_engine}
+            ->{supply_demand_box_width}
+            // 2.5,
+
+        $self->{liquidity_engine}
+            ->{supply_demand_overlap_atr_mult}
+            // 2.0,
     );
 
     return if defined $self->{smc_cache_key}
@@ -993,7 +1064,12 @@ sub update_smc_overlay {
     $self->{liquidity_overlay}->set_result($liq_result);
     $self->{smc_overlay}->set_result($smc_external);
 
-    $self->{smc_cache_key} = $cache_key;
+        $self->{smc_cache_key} = $cache_key;
+
+    # Registrar la última vela donde sí se reconstruyeron
+    # completamente Liquidity y SMC.
+    $self->{replay_last_heavy_index} =
+        $until_index;
 }
 
 sub draw {
@@ -1134,7 +1210,8 @@ sub draw {
     # FVG y Order Blocks deben poder calcularse y mostrarse
     # independientemente de que el ZigZag esté visible.
     || $self->{show_fvg}
-    || $self->{show_order_blocks};
+    || $self->{show_order_blocks}
+    || $self->{show_supply_demand};
 
     $self->update_smc_overlay($calc_until) if $needs_smc_or_liquidity;
 
@@ -1257,12 +1334,13 @@ sub draw {
     );
     }
 
-    if (
+        if (
         $self->{show_bsl}
         || $self->{show_ssl}
         || $self->{show_eqh}
         || $self->{show_eql}
         || $self->{show_liquidity_events}
+        || $self->{show_supply_demand}
     ) {
         # Es indispensable enviar SIEMPRE todos los flags.
         # Así el overlay no conserva valores de una selección anterior.
@@ -1280,6 +1358,10 @@ sub draw {
 
         $self->{liquidity_overlay}->{show_liquidity_events} =
             $self->{show_liquidity_events} ? 1 : 0;
+
+        $self->{liquidity_overlay}->{show_supply_demand} =
+            $self->{show_supply_demand} ? 1 : 0;
+
 
         $self->{liquidity_overlay}->draw(
             $c,
@@ -2125,6 +2207,9 @@ sub replay_start_at {
     $self->{replay_selecting} = 0;
     $self->{replay_mode}      = 1;
     $self->{replay_index}     = $idx;
+        $self->{replay_playing}          = 0;
+    $self->{replay_last_heavy_index} = undef;
+    $self->{smc_cache_key}           = undef;
     $self->invalidate_vwap_cache();
     $self->invalidate_volume_profile_cache();
     $self->_replay_apply_window();
@@ -2149,6 +2234,9 @@ sub replay_exit {
     $self->{replay_mode}      = 0;
     $self->{replay_selecting} = 0;
     $self->{replay_index}     = undef;
+        $self->{replay_playing}          = 0;
+    $self->{replay_last_heavy_index} = undef;
+    $self->{smc_cache_key}           = undef;
     $self->invalidate_vwap_cache();
     $self->invalidate_volume_profile_cache();
     $self->fit_all();
@@ -2158,9 +2246,35 @@ sub replay_exit {
 sub replay_pause {
     my ($self) = @_;
 
+    my $was_playing =
+        $self->{replay_playing}
+        ? 1
+        : 0;
+
+    $self->{replay_playing} = 0;
+
     if (defined $self->{replay_after}) {
-        $self->{mw}->afterCancel($self->{replay_after});
+        $self->{mw}->afterCancel(
+            $self->{replay_after}
+        );
+
         $self->{replay_after} = undef;
+    }
+
+    return
+        if !$self->{replay_mode};
+
+    # Al detener el Replay hacemos un cálculo exacto en la
+    # vela actual, incluso si durante Play se reutilizó una
+    # estructura calculada unas velas atrás.
+    if ($was_playing) {
+        $self->{replay_last_heavy_index} = undef;
+        $self->{smc_cache_key}           = undef;
+
+        $self->invalidate_vwap_cache();
+        $self->invalidate_volume_profile_cache();
+
+        $self->draw();
     }
 }
 
@@ -2169,36 +2283,147 @@ sub replay_play {
 
     return if !$self->{replay_mode};
 
-    $self->replay_pause();
+    # Evitar dos temporizadores simultáneos.
+    if (defined $self->{replay_after}) {
+        $self->{mw}->afterCancel(
+            $self->{replay_after}
+        );
 
-    $self->{replay_after} = $self->{mw}->after(
-        $self->{replay_speed},
-        sub {
-            $self->replay_step(1);
-            $self->replay_play() if $self->{replay_mode};
-        }
-    );
+        $self->{replay_after} = undef;
+    }
+
+    $self->{replay_playing} = 1;
+
+    # draw() decidirá si realmente existe algún indicador
+    # estructural que necesite actualizarse.
+    #
+    # No llamamos directamente a update_smc_overlay(),
+    # porque eso recalcularía SMC incluso sin capas activas.
+    $self->draw();
+
+    $self->_replay_schedule_next();
 }
 
+sub _replay_schedule_next {
+    my ($self) = @_;
 
+    return if !$self->{replay_mode};
+    return if !$self->{replay_playing};
+
+    $self->{replay_after} =
+        $self->{mw}->after(
+            $self->{replay_speed},
+
+            sub {
+                $self->{replay_after} = undef;
+
+                return
+                    if !$self->{replay_mode};
+
+                return
+                    if !$self->{replay_playing};
+
+                my $last =
+                    $self->{market}->last_index();
+
+                if (
+                    $self->{replay_index}
+                    >=
+                    $last
+                ) {
+                    $self->replay_pause();
+                    return;
+                }
+
+                # Segundo argumento = llamada automática.
+                $self->replay_step(1, 1);
+
+                $self->_replay_schedule_next()
+                    if $self->{replay_playing};
+            }
+        );
+}
 
 sub replay_step {
-
-    my ($self, $dir) = @_;
+    my (
+        $self,
+        $dir,
+        $from_auto,
+    ) = @_;
 
     return if !$self->{replay_mode};
 
-    my $last = $self->{market}->last_index();
+    $dir //= 1;
+    $from_auto //= 0;
 
-    $self->{replay_index} += $dir;
+    my $last =
+        $self->{market}->last_index();
 
-    $self->{replay_index} = 0 if $self->{replay_index} < 0;
-    $self->{replay_index} = $last if $self->{replay_index} > $last;
-    $self->invalidate_vwap_cache();
-    $self->invalidate_volume_profile_cache();
+    my $previous_index =
+        $self->{replay_index};
+
+    $self->{replay_index} +=
+        $dir;
+
+    $self->{replay_index} = 0
+        if $self->{replay_index} < 0;
+
+    $self->{replay_index} = $last
+        if $self->{replay_index} > $last;
+
+    return
+        if defined $previous_index
+        &&
+        $self->{replay_index}
+            ==
+        $previous_index;
+
+    # ==========================================================
+    # PASO MANUAL
+    #
+    # Step+, Step- o cualquier movimiento manual debe mostrar
+    # indicadores exactos inmediatamente.
+    # ==========================================================
+    if (!$from_auto) {
+        $self->{replay_playing}         = 0;
+        $self->{replay_last_heavy_index} = undef;
+        $self->{smc_cache_key}           = undef;
+
+        $self->invalidate_vwap_cache();
+        $self->invalidate_volume_profile_cache();
+    }
+    else {
+        # En reproducción automática, VWAP y Volume Profile
+        # también se actualizan con la misma frecuencia que
+        # los indicadores pesados.
+        my $stride =
+            $self->{replay_indicator_stride}
+            // 5;
+
+        $stride = 1
+            if $stride < 1;
+
+        my $must_refresh =
+            !defined
+                $self->{replay_last_heavy_index}
+            ||
+            abs(
+                $self->{replay_index}
+                -
+                $self->{replay_last_heavy_index}
+            ) >= $stride;
+
+        if ($must_refresh) {
+            $self->invalidate_vwap_cache();
+            $self->invalidate_volume_profile_cache();
+        }
+    }
+
     $self->_replay_apply_window();
     $self->draw();
-    $self->audit_replay_state() if $self->{debug_replay};
+
+    $self->audit_replay_state()
+        if $self->{debug_replay};
 }
 
 
@@ -2860,6 +3085,7 @@ sub _set_internal_zigzag_tf {
     $self->{internal_zigzag_tf} = $map{$label} // 60;
 
     $self->{smc_cache_key} = undef;
+    $self->{replay_last_heavy_index} = undef;
 
     if ($self->{liquidity_engine}) {
         $self->{liquidity_engine}->{internal_zigzag_tf} = $self->{internal_zigzag_tf};
@@ -3096,8 +3322,40 @@ sub _sync_layer_flags {
     $self->{show_order_blocks} =
            ($self->{layers}{external}{order_blocks} // 0)
         || ($self->{layers}{internal}{order_blocks} // 0);
+            $self->{show_supply_demand} =
+        $self->{layers}{external}{supply_demand}
+        // 0;
 }
 
+sub _refresh_structural_layers {
+    my ($self) = @_;
+
+    # Sincronizar checkboxes con los flags utilizados en draw().
+    $self->_sync_layer_flags();
+
+    # Obligar a reconstruir SMC, Liquidity, FVG,
+    # Order Blocks y Supply/Demand.
+    $self->{smc_cache_key} = undef;
+
+    # En Replay automático, impedir que el nuevo indicador
+    # reutilice un resultado estructural anterior.
+    $self->{replay_last_heavy_index} = undef;
+
+    # El modo BOS_CHOCH del Volume Profile depende de SMC.
+    if (
+        $self->{show_volume_profile}
+        &&
+        uc(
+            $self->{volume_profile_mode}
+            //
+            'VISIBLE'
+        ) eq 'BOS_CHOCH'
+    ) {
+        $self->invalidate_volume_profile_cache();
+    }
+
+    $self->draw();
+}
 
 
 sub _build_layers_popup {
@@ -3183,9 +3441,8 @@ sub _build_layers_popup {
         $frame->Checkbutton(
             -variable   => \$self->{layers}{internal}{$key},
             -background => '#f5f5f5',
-            -command    => sub {
-                $self->_sync_layer_flags();
-                $self->draw();
+            -command => sub {
+                $self->_refresh_structural_layers();
             },
         )->grid(
             -row    => $row,
@@ -3195,9 +3452,8 @@ sub _build_layers_popup {
         $frame->Checkbutton(
             -variable   => \$self->{layers}{external}{$key},
             -background => '#f5f5f5',
-            -command    => sub {
-                $self->_sync_layer_flags();
-                $self->draw();
+            -command => sub {
+                $self->_refresh_structural_layers();
             },
         )->grid(
             -row    => $row,
@@ -3237,9 +3493,8 @@ sub _build_layers_popup {
             -text       => $label,
             -variable   => \$self->{layers}{external}{$key},
             -background => '#f5f5f5',
-            -command    => sub {
-                $self->_sync_layer_flags();
-                $self->draw();
+            -command => sub {
+                $self->_refresh_structural_layers();
             },
         )->grid(
             -row        => $row,
@@ -3285,9 +3540,8 @@ sub _build_layers_popup {
         -text       => 'EQH',
         -variable   => \$self->{layers}{equal}{eqh},
         -background => '#f5f5f5',
-        -command    => sub {
-            $self->_sync_layer_flags();
-            $self->draw();
+        -command => sub {
+            $self->_refresh_structural_layers();
         },
     )->pack(
         -side => 'left',
@@ -3298,9 +3552,8 @@ sub _build_layers_popup {
         -text       => 'EQL',
         -variable   => \$self->{layers}{equal}{eql},
         -background => '#f5f5f5',
-        -command    => sub {
-            $self->_sync_layer_flags();
-            $self->draw();
+        -command => sub {
+            $self->_refresh_structural_layers();
         },
     )->pack(
         -side => 'left',
@@ -3326,14 +3579,39 @@ sub _build_layers_popup {
 
     $row++;
 
+
+    $frame->Checkbutton(
+        -text       => 'Supply / Demand',
+        -variable   =>
+            \$self->{layers}{external}
+                {supply_demand},
+
+        -background => '#f5f5f5',
+
+        -command => sub {
+            $self->_refresh_structural_layers();
+        },
+
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -sticky     => 'w',
+        -padx       => 20,
+        -pady       => 2,
+    );
+
+    $row++;
+
+
     $frame->Checkbutton(
         -text       => 'FVG',
         -variable   => \$self->{layers}{external}{fvg},
         -background => '#f5f5f5',
-        -command    => sub {
-            $self->_sync_layer_flags();
-            $self->draw();
+        -command => sub {
+            $self->_refresh_structural_layers();
         },
+
     )->grid(
         -row        => $row,
         -column     => 0,
@@ -3349,10 +3627,10 @@ sub _build_layers_popup {
         -text       => 'Order Blocks',
         -variable   => \$self->{layers}{external}{order_blocks},
         -background => '#f5f5f5',
-        -command    => sub {
-            $self->_sync_layer_flags();
-            $self->draw();
+        -command => sub {
+            $self->_refresh_structural_layers();
         },
+
     )->grid(
         -row        => $row,
         -column     => 0,
@@ -3382,10 +3660,10 @@ sub _build_layers_popup {
     $self->{vwap_selecting_anchor} = 0;
     $self->{show_volume_profile} = 0;
 
+    $self->invalidate_volume_profile_cache();
     $self->invalidate_vwap_cache();
 
-                $self->_sync_layer_flags();
-                $self->draw();
+                $self->_refresh_structural_layers();
             },
         )->grid(
             -row        => $row,

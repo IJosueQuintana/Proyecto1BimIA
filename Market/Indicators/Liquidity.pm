@@ -22,10 +22,43 @@ sub new {
         volume_lookback      => $args{volume_lookback}      // 20,
         volume_mult          => $args{volume_mult}          // 2.8,
         volume_range_atr_min => $args{volume_range_atr_min} // 1.2,
-        volume_react_mult    => $args{volume_react_mult}    // 1.5,
+                volume_react_mult    => $args{volume_react_mult}    // 1.5,
         min_swing_atr_mult   => $args{min_swing_atr_mult}   // 2.0,
-        volume_pivots => [],
 
+        # ==========================================================
+        # DIY SUPPLY / DEMAND
+        # ==========================================================
+                # Equivalente a swing_length = 10 del DIY.
+        supply_demand_swing_length =>
+            $args{supply_demand_swing_length} // 10,
+        supply_demand_volume_lookback =>
+            $args{supply_demand_volume_lookback} // 20,
+
+        supply_demand_volume_mult =>
+            $args{supply_demand_volume_mult} // 1.5,
+
+        supply_demand_range_atr_min =>
+            $args{supply_demand_range_atr_min} // 0.80,
+
+        # El DIY utiliza ATR * (box_width / 10).
+        # Con 2.5, el grosor resultante es ATR * 0.25.
+        supply_demand_box_width =>
+            $args{supply_demand_box_width} // 2.5,
+
+        supply_demand_overlap_atr_mult =>
+            $args{supply_demand_overlap_atr_mult} // 2.0,
+
+        supply_demand_history =>
+            $args{supply_demand_history} // 20,
+
+        supply_demand_require_volume =>
+            exists $args{supply_demand_require_volume}
+                ? ($args{supply_demand_require_volume} ? 1 : 0)
+                : 0,
+
+        supply_demand_zones => [],
+
+        volume_pivots => [],
 
 
         eq_tolerance     => $args{eq_tolerance}     // 0.10,
@@ -96,6 +129,7 @@ sub reset {
     $self->{liquidity}                = [];
     $self->{events}                   = [];
     $self->{equal_levels}             = [];
+    $self->{supply_demand_zones}      = [];
 
     $self->{clean_volume_swings} = [];
     $self->{structural_pivots_clean} = [];
@@ -197,6 +231,13 @@ sub calculate_until {
 
     $self->_detect_equal_levels($atr_values);
 
+        $self->{supply_demand_zones}
+        = $self->_build_supply_demand_zones(
+            $candles,
+            $atr_values,
+            $until_index,
+        );
+
     return {
         pivots              => $self->{pivots},
         structural_pivots   => $self->{external_structure},
@@ -221,6 +262,7 @@ sub calculate_until {
         clean_volume_swings => $self->{clean_volume_swings},
         audit               => $self->{audit},
         internal_fibonacci => $self->{internal_fibonacci},
+        supply_demand_zones => $self->{supply_demand_zones},
     };
 }
 
@@ -1955,6 +1997,768 @@ sub _audit_push_example {
         swept_index    => $lvl->{swept_index},
         resolved_index => $lvl->{resolved_index},
     };
+}
+
+
+# ==============================================================
+# DIY SUPPLY / DEMAND
+#
+# Usa exclusivamente la estructura externa ya confirmada.
+#
+# HIGH confirmado -> SUPPLY
+# LOW confirmado  -> DEMAND
+#
+# No crea otro ZigZag y no modifica HH/HL/LH/LL.
+# ==============================================================
+sub _build_supply_demand_zones {
+    my (
+        $self,
+        $candles,
+        $atr_values,
+        $until_index,
+    ) = @_;
+
+    $candles    ||= [];
+    $atr_values ||= [];
+
+    return []
+        if !defined $until_index
+        || $until_index < 0;
+
+    my @zones;
+    my @supply_ids;
+    my @demand_ids;
+
+    # ==========================================================
+    # PIVOTES PROPIOS DEL DIY
+    #
+    # Replica:
+    # ta.pivothigh(high, 10, 10)
+    # ta.pivotlow(low, 10, 10)
+    #
+    # El pivote se ubica en pivot_index, pero solamente queda
+    # confirmado en confirmation_index.
+    # ==========================================================
+    my $detected_pivots =
+        $self->_detect_supply_demand_pivots(
+            $candles,
+            $until_index,
+        );
+
+    my @pivots =
+        @{$detected_pivots || []};
+
+    @pivots = sort {
+           ($a->{confirmation_index} // -1)
+        <=>
+           ($b->{confirmation_index} // -1)
+        ||
+           ($a->{pivot_index} // -1)
+        <=>
+           ($b->{pivot_index} // -1)
+    } @pivots;
+
+    for my $pivot (@pivots) {
+
+        next if !$pivot;
+        next if ref($pivot) ne 'HASH';
+
+        my $pivot_index =
+            $pivot->{pivot_index}
+            // $pivot->{index};
+
+        my $created_index =
+            $pivot->{confirmation_index}
+            // $pivot_index;
+
+        next if !defined $pivot_index;
+        next if !defined $created_index;
+        next if $created_index > $until_index;
+
+        my $pivot_bar =
+            $candles->[$pivot_index];
+
+        next if !$pivot_bar;
+
+        # El DIY usa ta.atr(50), no el ATR(14) general.
+        # Se calcula en la vela donde el pivote queda confirmado.
+        my $atr =
+            $self->_supply_demand_atr(
+                $candles,
+                $created_index,
+                50,
+            );
+
+        next if !defined $atr;
+        next if $atr <= 0;
+
+        # Este dato se conserva para auditoría/ML.
+        # No bloquea zonas porque require_volume = 0.
+        my $validation =
+            $self->_validate_supply_demand_origin(
+                $candles,
+                $atr_values,
+                $pivot_index,
+            );
+
+        if (
+            $self->{supply_demand_require_volume}
+            &&
+            !$validation->{validated}
+        ) {
+            next;
+        }
+
+        my $type =
+            ($pivot->{type} // '') eq 'HIGH'
+                ? 'SUPPLY'
+                : 'DEMAND';
+
+        my $height =
+              $atr
+            * (
+                (
+                    $self->{supply_demand_box_width}
+                    // 2.5
+                )
+                / 10
+            );
+
+        next if $height <= 0;
+
+        my ($top, $bottom);
+
+        if ($type eq 'SUPPLY') {
+            $top    = $pivot->{price};
+            $bottom = $top - $height;
+        }
+        else {
+            $bottom = $pivot->{price};
+            $top    = $bottom + $height;
+        }
+
+        my $poi =
+            ($top + $bottom) / 2;
+
+        next if !$self->_supply_demand_zone_is_separated(
+            \@zones,
+            $type,
+            $poi,
+            $atr,
+        );
+
+        my $zone = {
+            id => join(
+                '_',
+                'DIY',
+                $type,
+                $pivot_index,
+                $created_index,
+            ),
+
+            type   => $type,
+            source => 'DIY_SUPPLY_DEMAND',
+            tier   => 'diy',
+
+            # Vela donde realmente ocurrió el swing.
+            pivot_index => $pivot_index,
+
+            # Momento en que ta.pivot queda confirmado.
+            created_index => $created_index,
+            confirmed_index => $created_index,
+
+            # La banda comienza visualmente en el swing.
+            start_index => $pivot_index,
+
+            # Si sigue activa, se extiende hasta la última vela.
+            end_index => $until_index,
+
+            top         => $top,
+            bottom      => $bottom,
+            poi         => $poi,
+            atr         => $atr,
+            zone_height => $height,
+
+            state => 'ACTIVE',
+
+            first_touch_index => undef,
+            mitigated_index   => undef,
+            broken_index      => undef,
+            resolved_index    => undef,
+
+            volume =>
+                $validation->{volume},
+
+            average_volume =>
+                $validation->{average_volume},
+
+            relative_volume =>
+                $validation->{relative_volume},
+
+            range_atr =>
+                $validation->{range_atr},
+
+            volume_validated =>
+                $validation->{validated} ? 1 : 0,
+        };
+
+        # No procesar la zona antes de su confirmación.
+        $self->_update_supply_demand_zone_state(
+            $zone,
+            $candles,
+            $created_index + 1,
+            $until_index,
+        );
+
+        push @zones, $zone;
+
+        # El DIY conserva como máximo 20 zonas de cada tipo.
+        if ($type eq 'SUPPLY') {
+            push @supply_ids, $zone->{id};
+
+            if (
+                @supply_ids
+                >
+                (
+                    $self->{supply_demand_history}
+                    // 20
+                )
+            ) {
+                my $remove_id =
+                    shift @supply_ids;
+
+                @zones = grep {
+                    ($_->{id} // '')
+                    ne
+                    $remove_id
+                } @zones;
+            }
+        }
+        else {
+            push @demand_ids, $zone->{id};
+
+            if (
+                @demand_ids
+                >
+                (
+                    $self->{supply_demand_history}
+                    // 20
+                )
+            ) {
+                my $remove_id =
+                    shift @demand_ids;
+
+                @zones = grep {
+                    ($_->{id} // '')
+                    ne
+                    $remove_id
+                } @zones;
+            }
+        }
+    }
+
+    # ==========================================================
+    # El DIY mantiene:
+    # - hasta 20 zonas activas/mitigadas por tipo;
+    # - solamente 5 líneas históricas rotas por tipo.
+    # ==========================================================
+    my @active_or_mitigated =
+        grep {
+            ($_->{state} // 'ACTIVE')
+            ne 'BROKEN'
+        } @zones;
+
+    my @broken_supply =
+        grep {
+               ($_->{state} // '')
+               eq 'BROKEN'
+            && ($_->{type} // '')
+               eq 'SUPPLY'
+        } @zones;
+
+    my @broken_demand =
+        grep {
+               ($_->{state} // '')
+               eq 'BROKEN'
+            && ($_->{type} // '')
+               eq 'DEMAND'
+        } @zones;
+
+    @broken_supply = sort {
+        ($a->{broken_index} // 0)
+        <=>
+        ($b->{broken_index} // 0)
+    } @broken_supply;
+
+    @broken_demand = sort {
+        ($a->{broken_index} // 0)
+        <=>
+        ($b->{broken_index} // 0)
+    } @broken_demand;
+
+    if (@broken_supply > 5) {
+        @broken_supply =
+            @broken_supply[
+                $#broken_supply - 4
+                ..
+                $#broken_supply
+            ];
+    }
+
+    if (@broken_demand > 5) {
+        @broken_demand =
+            @broken_demand[
+                $#broken_demand - 4
+                ..
+                $#broken_demand
+            ];
+    }
+
+    @zones = (
+        @active_or_mitigated,
+        @broken_supply,
+        @broken_demand,
+    );
+
+    @zones = sort {
+           ($a->{start_index} // 0)
+        <=>
+           ($b->{start_index} // 0)
+        ||
+           ($a->{created_index} // 0)
+        <=>
+           ($b->{created_index} // 0)
+    } @zones;
+
+    return \@zones;
+}
+
+
+sub _validate_supply_demand_origin {
+    my (
+        $self,
+        $candles,
+        $atr_values,
+        $index,
+    ) = @_;
+
+    my $bar = $candles->[$index];
+
+    return {
+        validated       => 0,
+        volume          => 0,
+        average_volume  => 0,
+        relative_volume => 0,
+        range_atr       => 0,
+    } if !$bar;
+
+    my $lookback =
+        $self->{supply_demand_volume_lookback}
+        // 20;
+
+    my $start =
+        $index - $lookback;
+
+    $start = 0
+        if $start < 0;
+
+    my $volume_sum   = 0;
+    my $volume_count = 0;
+
+    # El promedio utiliza únicamente velas anteriores.
+    # No incluye la vela del pivote.
+    for my $i ($start .. $index - 1) {
+        my $previous = $candles->[$i];
+        next if !$previous;
+
+        $volume_sum +=
+            $previous->{volume} // 0;
+
+        $volume_count++;
+    }
+
+    my $average_volume =
+        $volume_count > 0
+            ? $volume_sum / $volume_count
+            : 0;
+
+    my $volume =
+        $bar->{volume} // 0;
+
+    my $relative_volume =
+        $average_volume > 0
+            ? $volume / $average_volume
+            : 0;
+
+    my $atr =
+        $atr_values->[$index] // 0;
+
+    my $range =
+          ($bar->{high} // 0)
+        - ($bar->{low}  // 0);
+
+    my $range_atr =
+        $atr > 0
+            ? $range / $atr
+            : 0;
+
+    my $validated =
+           $average_volume > 0
+        && $relative_volume
+            >=
+            (
+                $self->{supply_demand_volume_mult}
+                // 1.5
+            )
+        && $range_atr
+            >=
+            (
+                $self->{supply_demand_range_atr_min}
+                // 0.80
+            );
+
+    return {
+        validated       => $validated ? 1 : 0,
+        volume          => $volume,
+        average_volume  => $average_volume,
+        relative_volume => $relative_volume,
+        range_atr       => $range_atr,
+    };
+}
+
+
+sub _supply_demand_zone_is_separated {
+    my (
+        $self,
+        $zones,
+        $type,
+        $new_poi,
+        $atr,
+    ) = @_;
+
+    return 1
+        if !$zones
+        || ref($zones) ne 'ARRAY';
+
+    # Igual que el DIY:
+    # atr_threshold = atrpoi * 2
+    my $threshold =
+        $atr * 2.0;
+
+    for my $zone (@$zones) {
+        next if !$zone;
+        next if ref($zone) ne 'HASH';
+        next if !defined $zone->{poi};
+
+        # El DIY mantiene arreglos distintos:
+        # current_supply_box y current_demand_box.
+        # Por eso Supply solo se compara con Supply
+        # y Demand únicamente con Demand.
+        next
+            if ($zone->{type} // '')
+            ne
+            ($type // '');
+
+        # Las zonas rotas ya fueron eliminadas del arreglo
+        # activo en el DIY, por lo que no bloquean otras.
+        next
+            if ($zone->{state} // 'ACTIVE')
+            eq 'BROKEN';
+
+        my $upper_boundary =
+            $zone->{poi} + $threshold;
+
+        my $lower_boundary =
+            $zone->{poi} - $threshold;
+
+        return 0
+            if $new_poi >= $lower_boundary
+            && $new_poi <= $upper_boundary;
+    }
+
+    return 1;
+}
+
+sub _update_supply_demand_zone_state {
+    my (
+        $self,
+        $zone,
+        $candles,
+        $from_index,
+        $until_index,
+    ) = @_;
+
+    return if !$zone;
+    return if !$candles;
+    return if ref($candles) ne 'ARRAY';
+    return if $from_index > $until_index;
+
+    my $created_index =
+        $zone->{created_index}
+        // 0;
+
+    for my $i ($from_index .. $until_index) {
+        my $bar = $candles->[$i];
+
+        next if !$bar;
+        next if ref($bar) ne 'HASH';
+
+        my $high  = $bar->{high};
+        my $low   = $bar->{low};
+        my $close = $bar->{close};
+
+        next if !defined $high;
+        next if !defined $low;
+        next if !defined $close;
+
+        # Las primeras velas posteriores al pivote todavía
+        # forman parte de la creación de la zona.
+        my $can_mitigate =
+            $i > $created_index + 1;
+
+        my $touches_zone =
+               $can_mitigate
+            && $high >= $zone->{bottom}
+            && $low  <= $zone->{top};
+
+        # Una mitigación solamente cambia su estado informativo.
+        # La zona sigue extendiéndose.
+        if (
+            $touches_zone
+            &&
+            !defined $zone->{first_touch_index}
+        ) {
+            $zone->{first_touch_index} = $i;
+            $zone->{mitigated_index}   = $i;
+            $zone->{state}             = 'MITIGATED';
+        }
+
+        # Igual que el DIY: la zona únicamente finaliza
+        # cuando el cierre atraviesa su borde exterior.
+        my $broken =
+            $zone->{type} eq 'SUPPLY'
+                ? ($close >= $zone->{top})
+                : ($close <= $zone->{bottom});
+
+        if ($broken) {
+            $zone->{state}          = 'BROKEN';
+            $zone->{broken_index}   = $i;
+            $zone->{resolved_index} = $i;
+            $zone->{end_index}      = $i;
+
+            last;
+        }
+    }
+}
+
+
+sub _detect_supply_demand_pivots {
+    my (
+        $self,
+        $candles,
+        $until_index,
+    ) = @_;
+
+    $candles ||= [];
+
+    my $length =
+        $self->{supply_demand_swing_length}
+        // 10;
+
+    $length = 1
+        if $length < 1;
+
+    
+        return []
+        if !defined $until_index
+        || $until_index < ($length * 2);
+
+        my @pivots;
+    # Para confirmar un pivote en i necesitamos:
+    # length velas anteriores y length velas posteriores.
+    #
+    # Pero se registra como creado únicamente cuando
+    # esas velas posteriores ya existen:
+    #
+    # confirmation_index = pivot_index + length
+    for my $pivot_index (
+        $length
+        ..
+        $until_index - $length
+    ) {
+        my $pivot_bar =
+            $candles->[$pivot_index];
+
+        next if !$pivot_bar;
+
+        my $pivot_high =
+            $pivot_bar->{high};
+
+        my $pivot_low =
+            $pivot_bar->{low};
+
+        next if !defined $pivot_high;
+        next if !defined $pivot_low;
+
+        my $is_high = 1;
+        my $is_low  = 1;
+
+        for my $j (
+            $pivot_index - $length
+            ..
+            $pivot_index + $length
+        ) {
+            next if $j == $pivot_index;
+
+            my $bar = $candles->[$j];
+
+            if (!$bar) {
+                $is_high = 0;
+                $is_low  = 0;
+                last;
+            }
+
+            if (
+                !defined $bar->{high}
+                || $bar->{high} >= $pivot_high
+            ) {
+                $is_high = 0;
+            }
+
+            if (
+                !defined $bar->{low}
+                || $bar->{low} <= $pivot_low
+            ) {
+                $is_low = 0;
+            }
+
+            last
+                if !$is_high
+                && !$is_low;
+        }
+
+        my $confirmation_index =
+            $pivot_index + $length;
+
+        if ($is_high) {
+            push @pivots, {
+                type               => 'HIGH',
+                price              => $pivot_high,
+                index              => $pivot_index,
+                pivot_index        => $pivot_index,
+                confirmation_index => $confirmation_index,
+            };
+        }
+        elsif ($is_low) {
+            push @pivots, {
+                type               => 'LOW',
+                price              => $pivot_low,
+                index              => $pivot_index,
+                pivot_index        => $pivot_index,
+                confirmation_index => $confirmation_index,
+            };
+        }
+    }
+
+    return \@pivots;
+}
+
+sub _supply_demand_atr {
+    my (
+        $self,
+        $candles,
+        $index,
+        $period,
+    ) = @_;
+
+    $period //= 50;
+
+    return 0
+        if !$candles
+        || ref($candles) ne 'ARRAY'
+        || !defined $index
+        || $index < 0
+        || $period < 1;
+
+    my @true_ranges;
+
+    for my $i (0 .. $index) {
+        my $bar =
+            $candles->[$i];
+
+        next if !$bar;
+        next if !defined $bar->{high};
+        next if !defined $bar->{low};
+
+        my $tr =
+            $bar->{high}
+            -
+            $bar->{low};
+
+        if ($i > 0) {
+            my $previous =
+                $candles->[$i - 1];
+
+            if (
+                $previous
+                && defined $previous->{close}
+            ) {
+                my $high_gap =
+                    abs(
+                        $bar->{high}
+                        -
+                        $previous->{close}
+                    );
+
+                my $low_gap =
+                    abs(
+                        $bar->{low}
+                        -
+                        $previous->{close}
+                    );
+
+                $tr = $high_gap
+                    if $high_gap > $tr;
+
+                $tr = $low_gap
+                    if $low_gap > $tr;
+            }
+        }
+
+        push @true_ranges, $tr;
+    }
+
+    return 0
+        if !@true_ranges;
+
+    # Semilla de la RMA: promedio de los primeros period TR.
+    my $seed_count =
+        @true_ranges < $period
+            ? scalar(@true_ranges)
+            : $period;
+
+    my $seed_sum = 0;
+
+    for my $i (0 .. $seed_count - 1) {
+        $seed_sum +=
+            $true_ranges[$i];
+    }
+
+    my $atr =
+        $seed_sum / $seed_count;
+
+    # Wilder RMA:
+    # ATR = ((ATR_anterior * (period - 1)) + TR) / period
+    for my $i ($seed_count .. $#true_ranges) {
+        $atr =
+            (
+                $atr * ($period - 1)
+                +
+                $true_ranges[$i]
+            ) / $period;
+        }
+
+    return $atr;
 }
 
 1;

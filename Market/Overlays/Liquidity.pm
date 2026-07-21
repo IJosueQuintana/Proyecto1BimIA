@@ -13,6 +13,16 @@ sub new {
         show_eqh   => $args{show_eqh} // 0,
         show_eql   => $args{show_eql} // 0,
         show_liquidity_events => $args{show_liquidity_events} // 0,
+                show_supply_demand =>
+            $args{show_supply_demand} // 0,
+
+        show_supply_demand_poi =>
+            exists $args{show_supply_demand_poi}
+                ? ($args{show_supply_demand_poi} ? 1 : 0)
+                : 1,
+
+        show_broken_supply_demand =>
+            $args{show_broken_supply_demand} // 0,
     };
 
     return bless $self, $class;
@@ -84,6 +94,21 @@ sub draw {
             $right_limit,
         );
     }
+
+        if ($self->{show_supply_demand}) {
+        $self->_draw_supply_demand(
+            $canvas,
+            $start,
+            $end,
+            $x_of,
+            $state,
+            $scale,
+            $right_limit,
+        );
+    }
+
+
+
 }
 
 sub _draw_bsl_ssl {
@@ -494,5 +519,246 @@ sub draw_volume_pivots {
     }
 }
 
+
+sub _draw_supply_demand {
+    my (
+        $self,
+        $canvas,
+        $start,
+        $end,
+        $x_of,
+        $state,
+        $scale,
+        $right_limit,
+    ) = @_;
+
+    return if !$self->{show_supply_demand};
+
+    my $zones =
+        $self->{liq_result}
+            ->{supply_demand_zones}
+        || [];
+
+    return if ref($zones) ne 'ARRAY';
+
+    for my $zone (@$zones) {
+
+        next if !$zone;
+        next if ref($zone) ne 'HASH';
+
+        next if !defined $zone->{top};
+        next if !defined $zone->{bottom};
+        next if !defined $zone->{created_index};
+
+        my $zone_state =
+            $zone->{state} // 'ACTIVE';
+
+        
+
+        my $created_index =
+            $zone->{created_index};
+
+        my $resolved_index =
+            defined $zone->{resolved_index}
+                ? $zone->{resolved_index}
+                : $end;
+
+        next if $resolved_index < $start;
+        next if $created_index > $end;
+
+        my $draw_start_index =
+            $created_index < $start
+                ? $start
+                : $created_index;
+
+        my $draw_end_index =
+            $resolved_index > $end
+                ? $end
+                : $resolved_index;
+
+        my $x1 =
+            $x_of->(
+                $draw_start_index - $start
+            );
+
+        my $x2 =
+            $x_of->(
+                $draw_end_index - $start
+            );
+
+        next if !defined $x1;
+        next if !defined $x2;
+
+        $x1 = $state->{left}
+            if defined $state->{left}
+            && $x1 < $state->{left};
+
+        $x2 = $right_limit
+            if $x2 > $right_limit;
+
+        next if $x2 <= $x1;
+
+        my $y_top =
+            $scale->price_to_y(
+                $zone->{top},
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $state->{price_h},
+            );
+
+        my $y_bottom =
+            $scale->price_to_y(
+                $zone->{bottom},
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $state->{price_h},
+            );
+
+        next if !defined $y_top;
+        next if !defined $y_bottom;
+
+        my $type =
+            $zone->{type} // '';
+
+        my (
+            $fill,
+            $outline,
+            $text_color,
+        );
+
+        if ($type eq 'SUPPLY') {
+        $fill       = '#ededed';
+        $outline    = '#ededed';
+        $text_color = '#ffffff';
+    }
+    elsif ($type eq 'DEMAND') {
+        $fill       = '#00ffff';
+        $outline    = '#00ffff';
+        $text_color = '#ffffff';
+    }
+        else {
+            next;
+        }
+
+        my $stipple =
+            $zone_state eq 'ACTIVE'
+                ? 'gray50'
+                : $zone_state eq 'MITIGATED'
+                    ? 'gray50'
+                    : 'gray25';
+
+                # ======================================================
+        # ZONA ROTA
+        #
+        # El DIY elimina la banda y conserva únicamente
+        # una línea horizontal en el punto medio.
+        # ======================================================
+        if ($zone_state eq 'BROKEN') {
+
+            next
+                if !defined $zone->{poi};
+
+            my $y_poi =
+                $scale->price_to_y(
+                    $zone->{poi},
+                    $state->{price_min},
+                    $state->{price_max},
+                    0,
+                    $state->{price_h},
+                );
+
+            next if !defined $y_poi;
+
+            my $broken_color =
+                $type eq 'DEMAND'
+                    ? '#00cfd1'
+                    : '#d8d8d8';
+
+            $canvas->createLine(
+                $x1,
+                $y_poi,
+                $x2,
+                $y_poi,
+
+                -fill  => $broken_color,
+                -width => 1,
+            );
+
+            # Igual que el DIY:
+            # la zona convertida a BOS no mantiene
+            # las etiquetas SUPPLY, DEMAND ni POI.
+            next;
+        }
+        $canvas->createRectangle(
+            $x1,
+            $y_top,
+            $x2,
+            $y_bottom,
+
+            -fill    => $fill,
+            -outline => $outline,
+            -width   => 1,
+            -stipple => $stipple,
+        );
+
+        if (
+            $self->{show_supply_demand_poi}
+            &&
+            defined $zone->{poi}
+        ) {
+            my $y_poi =
+                $scale->price_to_y(
+                    $zone->{poi},
+                    $state->{price_min},
+                    $state->{price_max},
+                    0,
+                    $state->{price_h},
+                );
+
+            if (defined $y_poi) {
+                $canvas->createLine(
+                    $x1,
+                    $y_poi,
+                    $x2,
+                    $y_poi,
+
+                    -fill  => $outline,
+                    -dash  => [3, 3],
+                    -width => 1,
+                );
+
+                $canvas->createText(
+                    $x1 + 4,
+                 $y_poi - 6,
+
+                    -text   => 'POI',
+                    -fill   => $text_color,
+                    -font   => ['Arial', 7, 'normal'],
+                    -anchor => 'w',
+                );
+            }
+        }
+
+        my $label = $type;
+
+        $label .= ' M'
+            if $zone_state eq 'MITIGATED';
+
+        $label .= ' X'
+            if $zone_state eq 'BROKEN';
+
+                $canvas->createText(
+            ($x1 + $x2) / 2,
+            $y_top + 7,
+
+            -text   => $label,
+            -fill   => $text_color,
+            -font   => ['Arial', 7, 'bold'],
+            -anchor => 'center',
+        );
+    }
+}
 
 1;
