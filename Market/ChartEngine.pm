@@ -53,7 +53,7 @@ sub new {
 
        layers_panel_visible => 0,
         layers_panel         => undef,
-
+        indicators_popup => undef,
         layers => {
 
             internal => {
@@ -402,19 +402,91 @@ sub run {
     $self->{layers_popup}->overrideredirect(1);
 
     $self->_build_layers_popup();
+        # ==========================================================
+    # POPUP DE INDICADORES
+    # Anchored VWAP y Volume Profile
+    # ==========================================================
 
-    $layers_display->configure(
+    my $indicators_display = $top->Button(
+        -text  => 'Indicadores',
+        -width => 11,
+    )->pack(
+        -side => 'left',
+        -padx => 4,
+    );
+
+    $self->{indicators_button} = $indicators_display;
+
+    $self->{indicators_popup} = $mw->Toplevel();
+    $self->{indicators_popup}->withdraw();
+    $self->{indicators_popup}->overrideredirect(1);
+
+    $self->_build_indicators_popup();
+
+    $indicators_display->configure(
         -command => sub {
+
+            if (
+                $self->{indicators_popup}->state
+                eq 'withdrawn'
+            ) {
+                # Cerrar Layers para evitar dos menús
+                # flotantes abiertos simultáneamente.
+                if (
+                    $self->{layers_popup}
+                    && $self->{layers_popup}->state ne 'withdrawn'
+                ) {
+                    $self->{layers_popup}->withdraw();
+                }
+
+                my $x =
+                    $indicators_display->rootx;
+
+                my $y =
+                    $indicators_display->rooty
+                    +
+                    $indicators_display->height;
+
+                $self->{indicators_popup}->geometry(
+                    "+$x+$y"
+                );
+
+                $self->{indicators_popup}->deiconify();
+                $self->{indicators_popup}->raise();
+            }
+            else {
+                $self->{indicators_popup}->withdraw();
+            }
+        },
+    );
+    
+        $layers_display->configure(
+        -command => sub {
+
             if ($self->{layers_popup}->state eq 'withdrawn') {
+
+                # Cerrar Indicadores antes de abrir Layers.
+                if (
+                    $self->{indicators_popup}
+                    && $self->{indicators_popup}->state ne 'withdrawn'
+                ) {
+                    $self->{indicators_popup}->withdraw();
+                }
+
                 my $x = $layers_display->rootx;
-                my $y = $layers_display->rooty + $layers_display->height;
+                my $y =
+                    $layers_display->rooty
+                    +
+                    $layers_display->height;
+
                 $self->{layers_popup}->geometry("+$x+$y");
                 $self->{layers_popup}->deiconify();
                 $self->{layers_popup}->raise();
-            } else {
+            }
+            else {
                 $self->{layers_popup}->withdraw();
             }
-        }
+        },
     );
 
         # ==============================
@@ -517,70 +589,114 @@ sub run {
         }
     )->pack(-side => 'left');
 
-    $top->Button(
-        -text    => 'Start',
-        -command => sub { $self->go_to_start(); }
-    )->pack(-side => 'left');
+        # ==========================================================
+    # NAVEGACIÓN Y REPLAY COMPACTOS
+    # ==========================================================
 
     $top->Button(
-        -text    => 'End',
-        -command => sub { $self->go_to_end(); }
-    )->pack(-side => 'left');
-
-    $top->Button(
-    -text    => 'Replay',
-    -command => sub { $self->replay_select_start(); }
-    )->pack(-side => 'left');
-
-    $top->Button(
-        -text    => 'Play',
-        -command => sub { $self->replay_play(); }
-    )->pack(-side => 'left');
-
-    $top->Button(
-        -text    => 'Pause',
-        -command => sub { $self->replay_pause(); }
-    )->pack(-side => 'left');
-
-    $top->Button(
-        -text    => 'Step +',
-        -command => sub { $self->replay_step(1); }
-    )->pack(-side => 'left');
-
-    $top->Button(
-        -text    => 'Step -',
-        -command => sub { $self->replay_step(-1); }
-    )->pack(-side => 'left');
-
-    $top->Button(
-        -text    => 'Exit Replay',
-        -command => sub { $self->replay_exit(); }
-    )->pack(-side => 'left');
-
-
-
-    $top->Button(
-        -text    => 'VOL',
+        -text    => '|<',
+        -width   => 3,
         -command => sub {
-            $self->{show_volume_pivots} = !$self->{show_volume_pivots};
+            $self->go_to_start();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
+
+    $top->Button(
+        -text    => '>|',
+        -width   => 3,
+        -command => sub {
+            $self->go_to_end();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
+
+    $top->Button(
+        -text    => 'R',
+        -width   => 3,
+        -command => sub {
+            $self->replay_select_start();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
+
+    $top->Button(
+        -text    => '>',
+        -width   => 3,
+        -command => sub {
+            $self->replay_play();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
+
+    $top->Button(
+        -text    => '||',
+        -width   => 3,
+        -command => sub {
+            $self->replay_pause();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
+
+    $top->Button(
+        -text    => '>>',
+        -width   => 3,
+        -command => sub {
+            $self->replay_step(1);
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
+
+    $top->Button(
+        -text    => '<<',
+        -width   => 3,
+        -command => sub {
+            $self->replay_step(-1);
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
+
+    $top->Button(
+        -text    => 'ER',
+        -width   => 4,
+        -command => sub {
+            $self->replay_exit();
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
+
+    $top->Button(
+        -text    => 'V',
+        -width   => 3,
+        -command => sub {
+            $self->{show_volume_pivots} =
+                !$self->{show_volume_pivots};
+
             $self->draw();
-        }
-    )->pack(-side => 'left');
+        },
+    )->pack(
+        -side => 'left',
+        -padx => 1,
+    );
 
 
-    $top->Checkbutton(
-        -text     => 'FVG',
-        -variable => \$self->{show_fvg},
-        -command  => sub { $self->draw(); }
-    )->pack(-side => 'left');
-
-    $top->Checkbutton(
-        -text     => 'Order Blocks',
-        -variable => \$self->{show_order_blocks},
-        -command  => sub { $self->draw(); }
-    )->pack(-side => 'left');
     
-   
 
 
 
@@ -3192,13 +3308,12 @@ sub _build_layers_popup {
     );
 
     $row++;
-
-    # ==========================================================
-    # ANCHORED VWAP
+        # ==========================================================
+    # FVG Y ORDER BLOCKS
     # ==========================================================
 
     $frame->Label(
-        -text       => 'Anchored VWAP',
+        -text       => 'Imbalances',
         -font       => ['Arial', 9, 'bold'],
         -background => '#f5f5f5',
     )->grid(
@@ -3211,13 +3326,12 @@ sub _build_layers_popup {
 
     $row++;
 
-    # Mostrar u ocultar VWAP.
     $frame->Checkbutton(
-        -text       => 'Mostrar VWAP',
-        -variable   => \$self->{show_anchored_vwap},
+        -text       => 'FVG',
+        -variable   => \$self->{layers}{external}{fvg},
         -background => '#f5f5f5',
         -command    => sub {
-            $self->invalidate_vwap_cache();
+            $self->_sync_layer_flags();
             $self->draw();
         },
     )->grid(
@@ -3230,262 +3344,22 @@ sub _build_layers_popup {
     );
 
     $row++;
-    # ==========================================================
-    # SELECTOR DE MODO VWAP
-    # Funciona igual que Temporalidad y ZZ Interno.
-    # ==========================================================
-
-    $frame->Label(
-        -text       => 'Modo VWAP',
-        -background => '#f5f5f5',
-    )->grid(
-        -row    => $row,
-        -column => 0,
-        -sticky => 'w',
-        -padx   => 8,
-        -pady   => 2,
-    );
-
-    my $vwap_mode_display = $frame->Button(
-        -text  => $self->{vwap_anchor_mode} // 'MANUAL',
-        -width => 12,
-    );
-
-    $vwap_mode_display->grid(
-        -row        => $row,
-        -column     => 1,
-        -columnspan => 2,
-        -sticky     => 'we',
-        -padx       => 4,
-        -pady       => 2,
-    );
-
-    # Ventana flotante propia para los modos VWAP.
-    my $vwap_mode_popup = $self->{mw}->Toplevel();
-
-    $vwap_mode_popup->withdraw();
-    $vwap_mode_popup->overrideredirect(1);
-
-    my $vwap_mode_list = $vwap_mode_popup->Listbox(
-        -height          => 4,
-        -width           => 12,
-        -exportselection => 0,
-    )->pack(
-        -fill   => 'both',
-        -expand => 1,
-    );
-
-    my @vwap_modes = (
-        'MANUAL',
-        'DAY',
-        'WEEK',
-        'MONTH',
-    );
-
-    for my $mode (@vwap_modes) {
-        $vwap_mode_list->insert('end', $mode);
-    }
-
-    # Abrir o cerrar el selector.
-    $vwap_mode_display->configure(
-        -command => sub {
-
-            if ($vwap_mode_popup->state eq 'withdrawn') {
-
-                my $x = $vwap_mode_display->rootx;
-                my $y =
-                    $vwap_mode_display->rooty
-                    + $vwap_mode_display->height;
-
-                $vwap_mode_popup->geometry("+$x+$y");
-
-                $vwap_mode_popup->deiconify();
-                $vwap_mode_popup->raise();
-
-            } else {
-                $vwap_mode_popup->withdraw();
-            }
-        },
-    );
-
-    # Procesar la selección.
-    $vwap_mode_list->bind(
-        '<<ListboxSelect>>' => sub {
-
-            my @selection =
-                $vwap_mode_list->curselection;
-
-            return if !@selection;
-
-            my $position = $selection[0];
-
-            my $mode =
-                $vwap_modes[$position];
-
-            $self->{vwap_anchor_mode} = $mode;
-
-            $vwap_mode_display->configure(
-                -text => $mode,
-            );
-
-            $vwap_mode_popup->withdraw();
-
-            $self->{show_anchored_vwap} = 1;
-
-            # Los modos automáticos no esperan un clic.
-            if ($mode ne 'MANUAL') {
-                $self->{vwap_selecting_anchor} = 0;
-            }
-
-            $self->invalidate_vwap_cache();
-            $self->draw();
-        },
-    );
-
-    $row++;
-    
-    # Botón para seleccionar manualmente la vela de inicio.
-    $frame->Label(
-        -text       => 'Ancla manual',
-        -background => '#f5f5f5',
-    )->grid(
-        -row    => $row,
-        -column => 0,
-        -sticky => 'w',
-        -padx   => 8,
-        -pady   => 2,
-    );
-
-    $frame->Button(
-        -text => 'Seleccionar vela',
-        -command => sub {
-
-            $self->{vwap_anchor_mode} = 'MANUAL';
-
-            $vwap_mode_display->configure(
-                -text => 'MANUAL',
-            );
-
-            $self->{show_anchored_vwap} = 1;
-
-            $self->start_vwap_anchor_selection();
-
-            print STDERR
-                ">>> VWAP SELECT MODE: haga clic sobre una vela\n";
-
-            # Cerrar el panel principal para permitir
-            # seleccionar cómodamente una vela.
-            $self->{layers_popup}->withdraw();
-
-            # Cerrar también el selector de modo si estaba abierto.
-            $vwap_mode_popup->withdraw();
-
-            $self->draw();
-        },
-        
-    )->grid(
-        -row        => $row,
-        -column     => 1,
-        -columnspan => 2,
-        -sticky     => 'we',
-        -padx       => 4,
-        -pady       => 2,
-    );
-
-    $row++;
-
-    # Bandas de desviación estándar.
-    $frame->Label(
-        -text       => 'Bandas',
-        -background => '#f5f5f5',
-    )->grid(
-        -row    => $row,
-        -column => 0,
-        -sticky => 'w',
-        -padx   => 8,
-        -pady   => 2,
-    );
-
-    my $vwap_bands_frame = $frame->Frame(
-        -background => '#f5f5f5',
-    );
-
-    $vwap_bands_frame->grid(
-        -row        => $row,
-        -column     => 1,
-        -columnspan => 2,
-        -sticky     => 'w',
-        -padx       => 4,
-    );
-
-    $vwap_bands_frame->Checkbutton(
-        -text       => '±1',
-        -variable   => \$self->{show_vwap_band_1},
-        -background => '#f5f5f5',
-        -command    => sub {
-            $self->draw();
-        },
-    )->pack(
-        -side => 'left',
-        -padx => 2,
-    );
-
-    $vwap_bands_frame->Checkbutton(
-        -text       => '±2',
-        -variable   => \$self->{show_vwap_band_2},
-        -background => '#f5f5f5',
-        -command    => sub {
-            $self->draw();
-        },
-    )->pack(
-        -side => 'left',
-        -padx => 2,
-    );
-
-    $vwap_bands_frame->Checkbutton(
-        -text       => '±3',
-        -variable   => \$self->{show_vwap_band_3},
-        -background => '#f5f5f5',
-        -command    => sub {
-            $self->draw();
-        },
-    )->pack(
-        -side => 'left',
-        -padx => 2,
-    );
-
-    $row++;
-
-        $frame->Label(
-        -text       => 'Volume Profile',
-        -font       => ['Arial',9,'bold'],
-        -background => '#f5f5f5',
-    )->grid(
-        -row=>$row,
-        -column=>0,
-        -columnspan=>3,
-        -pady=>[8,4],
-    );
-
-    $row++;
 
     $frame->Checkbutton(
-        -text       => 'Mostrar Volume Profile',
-        -variable   => \$self->{show_volume_profile},
+        -text       => 'Order Blocks',
+        -variable   => \$self->{layers}{external}{order_blocks},
         -background => '#f5f5f5',
-        -command    => sub{
-
-            $self->invalidate_volume_profile_cache();
-
+        -command    => sub {
+            $self->_sync_layer_flags();
             $self->draw();
-
         },
     )->grid(
-        -row=>$row,
-        -column=>0,
-        -columnspan=>3,
-        -sticky=>'w',
-        -padx=>20,
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -sticky     => 'w',
+        -padx       => 20,
+        -pady       => 2,
     );
 
     $row++;
@@ -3506,6 +3380,7 @@ sub _build_layers_popup {
             }
             $self->{show_anchored_vwap} = 0;
     $self->{vwap_selecting_anchor} = 0;
+    $self->{show_volume_profile} = 0;
 
     $self->invalidate_vwap_cache();
 
@@ -3520,6 +3395,618 @@ sub _build_layers_popup {
             -padx       => 8,
             -pady       => [10, 5],
         );
+}
+
+sub _build_indicators_popup {
+    my ($self) = @_;
+
+    my $popup =
+        $self->{indicators_popup};
+
+    return if !$popup;
+
+    my $frame = $popup->Frame(
+        -relief      => 'solid',
+        -borderwidth => 1,
+        -background  => '#f5f5f5',
+    )->pack(
+        -fill   => 'both',
+        -expand => 1,
+    );
+
+    my $row = 0;
+
+    # ==========================================================
+    # TÍTULO
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Indicadores',
+        -font       => ['Arial', 10, 'bold'],
+        -background => '#f5f5f5',
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -padx       => 8,
+        -pady       => 6,
+    );
+
+    $row++;
+
+    # ==========================================================
+    # ANCHORED VWAP
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Anchored VWAP',
+        -font       => ['Arial', 9, 'bold'],
+        -background => '#f5f5f5',
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -padx       => 8,
+        -pady       => [4, 4],
+    );
+
+    $row++;
+
+    $frame->Checkbutton(
+        -text       => 'Mostrar VWAP',
+        -variable   => \$self->{show_anchored_vwap},
+        -background => '#f5f5f5',
+        -command    => sub {
+            $self->invalidate_vwap_cache();
+            $self->draw();
+        },
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -sticky     => 'w',
+        -padx       => 18,
+        -pady       => 2,
+    );
+
+    $row++;
+
+    # ==========================================================
+    # SELECTOR DEL MODO VWAP
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Modo VWAP',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    my $vwap_mode_display =
+        $frame->Button(
+            -text  =>
+                $self->{vwap_anchor_mode}
+                //
+                'MANUAL',
+            -width => 12,
+        );
+
+    $vwap_mode_display->grid(
+        -row        => $row,
+        -column     => 1,
+        -columnspan => 2,
+        -sticky     => 'we',
+        -padx       => 4,
+        -pady       => 2,
+    );
+
+    my $vwap_mode_popup =
+        $self->{mw}->Toplevel();
+
+    $vwap_mode_popup->withdraw();
+    $vwap_mode_popup->overrideredirect(1);
+
+    my @vwap_modes = qw(
+        MANUAL
+        DAY
+        WEEK
+        MONTH
+    );
+
+    my $vwap_mode_list =
+        $vwap_mode_popup->Listbox(
+            -height          => scalar(@vwap_modes),
+            -width           => 12,
+            -exportselection => 0,
+        )->pack(
+            -fill   => 'both',
+            -expand => 1,
+        );
+
+    for my $mode (@vwap_modes) {
+        $vwap_mode_list->insert(
+            'end',
+            $mode
+        );
+    }
+
+    $vwap_mode_display->configure(
+        -command => sub {
+
+            if (
+                $vwap_mode_popup->state
+                eq 'withdrawn'
+            ) {
+                my $x =
+                    $vwap_mode_display->rootx;
+
+                my $y =
+                    $vwap_mode_display->rooty
+                    +
+                    $vwap_mode_display->height;
+
+                $vwap_mode_popup->geometry(
+                    "+$x+$y"
+                );
+
+                $vwap_mode_popup->deiconify();
+                $vwap_mode_popup->raise();
+            }
+            else {
+                $vwap_mode_popup->withdraw();
+            }
+        },
+    );
+
+    $vwap_mode_list->bind(
+        '<<ListboxSelect>>' => sub {
+
+            my @selection =
+                $vwap_mode_list->curselection;
+
+            return if !@selection;
+
+            my $mode =
+                $vwap_modes[
+                    $selection[0]
+                ];
+
+            $self->set_vwap_anchor_mode(
+                $mode
+            );
+
+            $vwap_mode_display->configure(
+                -text => $mode
+            );
+
+            $self->{show_anchored_vwap} = 1;
+
+            $vwap_mode_popup->withdraw();
+
+            $self->draw();
+        },
+    );
+
+    $row++;
+
+    # ==========================================================
+    # ANCLA MANUAL
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Ancla manual',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    $frame->Button(
+        -text    => 'Seleccionar vela',
+        -command => sub {
+
+            $self->{vwap_anchor_mode} =
+                'MANUAL';
+
+            $vwap_mode_display->configure(
+                -text => 'MANUAL'
+            );
+
+            $self->{show_anchored_vwap} = 1;
+
+            $self->start_vwap_anchor_selection();
+
+            $self->{indicators_popup}->withdraw();
+            $vwap_mode_popup->withdraw();
+
+            print STDERR
+                ">>> VWAP SELECT MODE: haga clic sobre una vela\n";
+
+            $self->draw();
+        },
+    )->grid(
+        -row        => $row,
+        -column     => 1,
+        -columnspan => 2,
+        -sticky     => 'we',
+        -padx       => 4,
+        -pady       => 2,
+    );
+
+    $row++;
+
+    # ==========================================================
+    # BANDAS VWAP
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Bandas',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    my $bands_frame =
+        $frame->Frame(
+            -background => '#f5f5f5',
+        );
+
+    $bands_frame->grid(
+        -row        => $row,
+        -column     => 1,
+        -columnspan => 2,
+        -sticky     => 'w',
+        -padx       => 4,
+    );
+
+    for my $band (
+        [
+            '±1',
+            'show_vwap_band_1',
+        ],
+        [
+            '±2',
+            'show_vwap_band_2',
+        ],
+        [
+            '±3',
+            'show_vwap_band_3',
+        ],
+    ) {
+        my ($label, $key) = @{$band};
+
+        $bands_frame->Checkbutton(
+            -text       => $label,
+            -variable   => \$self->{$key},
+            -background => '#f5f5f5',
+            -command    => sub {
+                $self->draw();
+            },
+        )->pack(
+            -side => 'left',
+            -padx => 2,
+        );
+    }
+
+    $row++;
+
+    # ==========================================================
+    # VOLUME PROFILE
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Volume Profile',
+        -font       => ['Arial', 9, 'bold'],
+        -background => '#f5f5f5',
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -padx       => 8,
+        -pady       => [10, 4],
+    );
+
+    $row++;
+
+    $frame->Checkbutton(
+        -text       => 'Mostrar Volume Profile',
+        -variable   => \$self->{show_volume_profile},
+        -background => '#f5f5f5',
+        -command    => sub {
+            $self->invalidate_volume_profile_cache();
+            $self->draw();
+        },
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -sticky     => 'w',
+        -padx       => 18,
+        -pady       => 2,
+    );
+
+    $row++;
+
+    # ==========================================================
+    # SELECTOR DE MODO VOLUME PROFILE
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Modo Profile',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    my $profile_mode_display =
+        $frame->Button(
+            -text  =>
+                $self->{volume_profile_mode}
+                //
+                'VISIBLE',
+            -width => 12,
+        );
+
+    $profile_mode_display->grid(
+        -row        => $row,
+        -column     => 1,
+        -columnspan => 2,
+        -sticky     => 'we',
+        -padx       => 4,
+        -pady       => 2,
+    );
+
+    my $profile_mode_popup =
+        $self->{mw}->Toplevel();
+
+    $profile_mode_popup->withdraw();
+    $profile_mode_popup->overrideredirect(1);
+
+    my @profile_modes = qw(
+        VISIBLE
+        SESSION
+        BOS_CHOCH
+        HISTORICAL
+    );
+
+    my $profile_mode_list =
+        $profile_mode_popup->Listbox(
+            -height          => scalar(@profile_modes),
+            -width           => 14,
+            -exportselection => 0,
+        )->pack(
+            -fill   => 'both',
+            -expand => 1,
+        );
+
+    for my $mode (@profile_modes) {
+        $profile_mode_list->insert(
+            'end',
+            $mode
+        );
+    }
+
+    $profile_mode_display->configure(
+        -command => sub {
+
+            if (
+                $profile_mode_popup->state
+                eq 'withdrawn'
+            ) {
+                my $x =
+                    $profile_mode_display->rootx;
+
+                my $y =
+                    $profile_mode_display->rooty
+                    +
+                    $profile_mode_display->height;
+
+                $profile_mode_popup->geometry(
+                    "+$x+$y"
+                );
+
+                $profile_mode_popup->deiconify();
+                $profile_mode_popup->raise();
+            }
+            else {
+                $profile_mode_popup->withdraw();
+            }
+        },
+    );
+
+    $profile_mode_list->bind(
+        '<<ListboxSelect>>' => sub {
+
+            my @selection =
+                $profile_mode_list->curselection;
+
+            return if !@selection;
+
+            my $mode =
+                $profile_modes[
+                    $selection[0]
+                ];
+
+            $self->{volume_profile_mode} =
+                $mode;
+
+            $self->{show_volume_profile} = 1;
+
+            $profile_mode_display->configure(
+                -text => $mode
+            );
+
+            $profile_mode_popup->withdraw();
+
+            $self->invalidate_volume_profile_cache();
+            $self->draw();
+        },
+    );
+
+    $row++;
+
+    # ==========================================================
+    # CANTIDAD DE VELAS HISTÓRICAS
+    # ==========================================================
+
+    $frame->Label(
+        -text       => 'Velas históricas',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    my @historical_options = (
+        100,
+        250,
+        500,
+        1000,
+        2000,
+    );
+
+    my $historical_display =
+        $frame->Button(
+            -text  =>
+                $self->{volume_profile_historical_bars}
+                //
+                500,
+            -width => 12,
+        );
+
+    $historical_display->grid(
+        -row        => $row,
+        -column     => 1,
+        -columnspan => 2,
+        -sticky     => 'we',
+        -padx       => 4,
+        -pady       => 2,
+    );
+
+    my $historical_popup =
+        $self->{mw}->Toplevel();
+
+    $historical_popup->withdraw();
+    $historical_popup->overrideredirect(1);
+
+    my $historical_list =
+        $historical_popup->Listbox(
+            -height          => scalar(@historical_options),
+            -width           => 12,
+            -exportselection => 0,
+        )->pack(
+            -fill   => 'both',
+            -expand => 1,
+        );
+
+    for my $bars (@historical_options) {
+        $historical_list->insert(
+            'end',
+            $bars
+        );
+    }
+
+    $historical_display->configure(
+        -command => sub {
+
+            if (
+                $historical_popup->state
+                eq 'withdrawn'
+            ) {
+                my $x =
+                    $historical_display->rootx;
+
+                my $y =
+                    $historical_display->rooty
+                    +
+                    $historical_display->height;
+
+                $historical_popup->geometry(
+                    "+$x+$y"
+                );
+
+                $historical_popup->deiconify();
+                $historical_popup->raise();
+            }
+            else {
+                $historical_popup->withdraw();
+            }
+        },
+    );
+
+    $historical_list->bind(
+        '<<ListboxSelect>>' => sub {
+
+            my @selection =
+                $historical_list->curselection;
+
+            return if !@selection;
+
+            my $bars =
+                $historical_options[
+                    $selection[0]
+                ];
+
+            $self->{volume_profile_historical_bars} =
+                $bars;
+
+            $historical_display->configure(
+                -text => $bars
+            );
+
+            $historical_popup->withdraw();
+
+            $self->invalidate_volume_profile_cache();
+            $self->draw();
+        },
+    );
+
+    $row++;
+
+    # ==========================================================
+    # OCULTAR INDICADORES
+    # ==========================================================
+
+    $frame->Button(
+        -text => 'Ocultar indicadores',
+        -command => sub {
+
+            $self->{show_anchored_vwap} = 0;
+            $self->{vwap_selecting_anchor} = 0;
+
+            $self->{show_volume_profile} = 0;
+
+            $self->invalidate_vwap_cache();
+            $self->invalidate_volume_profile_cache();
+
+            $self->draw();
+        },
+    )->grid(
+        -row        => $row,
+        -column     => 0,
+        -columnspan => 3,
+        -sticky     => 'we',
+        -padx       => 8,
+        -pady       => [10, 5],
+    );
 }
 
 sub _current_until_index {
