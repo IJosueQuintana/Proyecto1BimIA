@@ -305,7 +305,7 @@ sub new {
         # se actualizan cada N velas.
         #
         # Las velas siguen avanzando una por una.
-        replay_indicator_stride => 5,
+        replay_indicator_stride => 10,
 
         # Última vela donde se hizo un cálculo estructural completo.
         replay_last_heavy_index => undef,
@@ -804,9 +804,34 @@ sub run {
     $mw->Tk::bind('<Escape>' => sub { $mw->destroy; });
 
     $self->fit_all();
-    $self->draw();
 
-    MainLoop;
+# ==========================================================
+# PRECÁLCULO ESTRUCTURAL INICIAL
+#
+# La aplicación puede tardar al iniciar, pero después todas
+# las capas reutilizan estos resultados y deben activarse
+# prácticamente de inmediato.
+# ==========================================================
+my $initial_until =
+    $self->{market}->last_index();
+
+if (
+    defined $initial_until
+    &&
+    $initial_until >= 0
+) {
+    print ">>> Calculando estructura inicial...\n";
+
+    $self->update_smc_overlay(
+        $initial_until
+    );
+
+    print ">>> Estructura inicial lista.\n";
+}
+
+$self->draw();
+
+MainLoop;
 }
 
 
@@ -1058,7 +1083,7 @@ sub update_smc_overlay {
     $self->{last_smc_external}        = $smc_external;
     $self->{last_smc_internal_visual} = $smc_internal_visual;
     $self->{last_smc_internal}        = $smc_internal;
-    $self->_print_audit_summary($liq_result, $smc_external, $smc_internal, $market);
+    #$self->_print_audit_summary($liq_result, $smc_external, $smc_internal, $market);
 
     # Se mantiene por compatibilidad con auditoría y ML.
     # Para ML seguimos usando estructura externa.
@@ -3355,28 +3380,58 @@ sub _sync_layer_flags {
 sub _refresh_structural_layers {
     my ($self) = @_;
 
-    # Sincronizar checkboxes con los flags utilizados en draw().
+    # Sincronizar los checkboxes con los flags usados por draw().
     $self->_sync_layer_flags();
 
-    # Obligar a reconstruir SMC, Liquidity, FVG,
-    # Order Blocks y Supply/Demand.
-    $self->{smc_cache_key} = undef;
+    # ==========================================================
+    # MODO NORMAL
+    #
+    # Las estructuras ya fueron precalculadas hasta la última vela.
+    # Mostrar u ocultar una capa no requiere recalcular.
+    # ==========================================================
+    if (!$self->{replay_mode}) {
+        $self->draw();
+        return;
+    }
 
-    # En Replay automático, impedir que el nuevo indicador
-    # reutilice un resultado estructural anterior.
-    $self->{replay_last_heavy_index} = undef;
+    # ==========================================================
+    # REPLAY
+    #
+    # Al activar la primera capa estructural durante Replay,
+    # debemos asegurarnos de que exista un resultado calculado
+    # exactamente hasta replay_index.
+    #
+    # No podemos reutilizar el precálculo del modo normal porque
+    # contendría velas futuras.
+    # ==========================================================
+    my $replay_index =
+        $self->{replay_index};
 
-    # El modo BOS_CHOCH del Volume Profile depende de SMC.
-    if (
-        $self->{show_volume_profile}
+    if (!defined $replay_index) {
+        $self->draw();
+        return;
+    }
+
+    my $expected_prefix =
+    join(
+        ':',
+        $self->{market}->{timeframe} // 1,
+        $replay_index,
+    ) . ':';
+
+    my $cache_matches_replay =
+        defined $self->{smc_cache_key}
         &&
-        uc(
-            $self->{volume_profile_mode}
-            //
-            'VISIBLE'
-        ) eq 'BOS_CHOCH'
-    ) {
-        $self->invalidate_volume_profile_cache();
+        index(
+            $self->{smc_cache_key},
+            $expected_prefix
+        ) == 0;
+
+    # Solo invalidar si el resultado almacenado no corresponde
+    # a la vela actual del Replay.
+    if (!$cache_matches_replay) {
+        $self->{smc_cache_key} = undef;
+        $self->{replay_last_heavy_index} = undef;
     }
 
     $self->draw();
