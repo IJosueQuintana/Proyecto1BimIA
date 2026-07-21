@@ -348,6 +348,202 @@ sub draw_events {
     };
 }
 
+# ==============================================================
+# FIBONACCI DEL ZIGZAG EXTERNO
+#
+# Dibuja exclusivamente el Fibonacci actual calculado por
+# Market::Indicators::Liquidity.
+#
+# No realiza cálculos estructurales.
+# ==============================================================
+sub draw_external_fibonacci {
+    my (
+        $self,
+        $canvas,
+        $start,
+        $end,
+        $x_of,
+        $state,
+        $price_panel,
+        $fibonacci,
+    ) = @_;
+
+    return if !$canvas;
+    return if !$state;
+    return if !$price_panel;
+    return if !$x_of;
+
+    return
+        if !$fibonacci
+        || ref($fibonacci) ne 'HASH';
+
+    my $levels =
+        $fibonacci->{levels};
+
+    return
+        if !$levels
+        || ref($levels) ne 'ARRAY'
+        || !@{$levels};
+
+    my $to_index =
+        $fibonacci->{to_index};
+
+    return
+        if !defined $to_index;
+
+    # El último pivote todavía no pertenece a la ventana visible.
+    return
+        if $to_index > $end;
+
+    my $scale =
+        $price_panel->{scale};
+
+    return if !$scale;
+
+    my $right_limit =
+        ($state->{right} // 0) - 5;
+
+    return
+        if $right_limit <= 0;
+
+    # Las líneas comienzan en el último pivote del impulso.
+    #
+    # Si dicho pivote quedó fuera a la izquierda, empiezan en
+    # el borde izquierdo visible.
+    my $draw_start_index =
+        $to_index;
+
+    $draw_start_index = $start
+        if $draw_start_index < $start;
+
+    my $x1 =
+        $x_of->(
+            $draw_start_index
+            -
+            $start
+        );
+
+    return if !defined $x1;
+
+    $x1 = $state->{left}
+        if defined $state->{left}
+        && $x1 < $state->{left};
+
+    my $x2 =
+        $right_limit;
+
+    return
+        if $x2 <= $x1;
+
+    for my $level (@{$levels}) {
+        next if !$level;
+        next if ref($level) ne 'HASH';
+        next if !defined $level->{ratio};
+        next if !defined $level->{price};
+
+        my $ratio =
+            $level->{ratio};
+
+        my $price =
+            $level->{price};
+
+        my $color =
+            $level->{color}
+            //
+            '#2962ff';
+
+        my $y =
+            $scale->price_to_y(
+                $price,
+                $state->{price_min},
+                $state->{price_max},
+                0,
+                $state->{price_h},
+            );
+
+        next if !defined $y;
+
+        # No dibujar niveles fuera del panel de precios.
+        next if $y < 0;
+        next if $y > $state->{price_h};
+
+        $canvas->createLine(
+            $x1,
+            $y,
+            $x2,
+            $y,
+
+            -fill  => $color,
+            -width => 1,
+            -dash  => [4, 3],
+        );
+
+        my $label =
+            sprintf(
+                '%.3f  %.2f',
+                $ratio,
+                $price,
+            );
+
+        # Fondo pequeño para que el precio se lea sobre las velas.
+        my $label_x =
+            $x2 - 4;
+
+        my $label_width = 112;
+
+        $canvas->createRectangle(
+            $label_x - $label_width,
+            $y - 9,
+            $label_x,
+            $y + 9,
+
+            -fill    => 'white',
+            -outline => $color,
+        );
+
+        $canvas->createText(
+            $label_x - 4,
+            $y,
+
+            -text   => $label,
+            -fill   => $color,
+            -font   => [
+                'Arial',
+                8,
+                'bold',
+            ],
+            -anchor => 'e',
+        );
+    }
+
+    # Etiqueta pequeña para distinguir la dirección del tramo.
+    my $direction =
+        $fibonacci->{direction}
+        //
+        '';
+
+    if ($direction ne '') {
+        my $direction_text =
+            $direction eq 'UP'
+                ? 'FIB EXT ↑'
+                : 'FIB EXT ↓';
+
+        $canvas->createText(
+            $x1 + 5,
+            48,
+
+            -text   => $direction_text,
+            -fill   => '#455a64',
+            -font   => [
+                'Arial',
+                8,
+                'bold',
+            ],
+            -anchor => 'w',
+        );
+    }
+}
+
 sub draw_fvg {
     my (
         $self,

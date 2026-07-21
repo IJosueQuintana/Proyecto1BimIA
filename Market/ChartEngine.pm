@@ -47,6 +47,8 @@ sub new {
 
        show_external_zigzag => 0,
         show_internal_zigzag => 0,
+        show_external_fibonacci =>
+            0,
         show_bos   => 0,
         show_choch => 0,
 
@@ -72,6 +74,7 @@ sub new {
                 labels => 0,
                 bos    => 0,
                 choch  => 0,
+                fibonacci => 0,
 
                 bsl => 0,
                 ssl => 0,
@@ -1191,6 +1194,7 @@ sub draw {
 
     || $self->{show_external_zigzag}
     || $self->{show_external_labels}
+        || $self->{show_external_fibonacci}
     || $self->{show_internal_zigzag}
     || $self->{show_internal_labels}
 
@@ -1245,6 +1249,24 @@ sub draw {
         show_zigzag => $self->{show_external_zigzag},
         show_labels => $self->{show_external_labels},
     );
+    }
+        # ========================================================
+    # FIBONACCI DEL ÚLTIMO TRAMO EXTERNO
+    # ========================================================
+    if ($self->{show_external_fibonacci}) {
+        $self->{smc_overlay}->draw_external_fibonacci(
+            $c,
+            $start,
+            $end,
+            $x_of,
+            \%state,
+            $self->{price_panel},
+
+            $self->{last_liq_result}
+                ? $self->{last_liq_result}
+                    ->{external_fibonacci}
+                : undef,
+        );
     }
 
     if ($self->{show_internal_zigzag} || $self->{show_internal_labels}) {
@@ -3277,6 +3299,9 @@ sub _sync_layer_flags {
 
     $self->{show_external_labels} =
         $self->{layers}{external}{labels} // 0;
+         $self->{show_external_fibonacci} =
+        $self->{layers}{external}{fibonacci}
+        // 0;
 
     # ==========================================================
     # BOS / CHoCH
@@ -3462,6 +3487,47 @@ sub _build_layers_popup {
 
         $row++;
     }
+
+        # ==========================================================
+    # FIBONACCI EXTERNO
+    # ==========================================================
+    $frame->Label(
+        -text       => 'Fibonacci',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 0,
+        -sticky => 'w',
+        -padx   => 8,
+        -pady   => 2,
+    );
+
+    # La columna interna queda vacía porque este Fibonacci
+    # pertenece únicamente al ZigZag externo.
+    $frame->Label(
+        -text       => '',
+        -background => '#f5f5f5',
+    )->grid(
+        -row    => $row,
+        -column => 1,
+    );
+
+    $frame->Checkbutton(
+        -variable =>
+            \$self->{layers}{external}{fibonacci},
+
+        -background =>
+            '#f5f5f5',
+
+        -command => sub {
+            $self->_refresh_structural_layers();
+        },
+    )->grid(
+        -row    => $row,
+        -column => 2,
+    );
+
+    $row++;
 
     # ==========================================================
     # LIQUIDEZ EXTERNA

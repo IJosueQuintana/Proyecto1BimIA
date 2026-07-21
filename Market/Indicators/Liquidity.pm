@@ -99,6 +99,7 @@ sub new {
         external_structure      => [],
 
         internal_fibonacci      => [],
+        external_fibonacci => undef,
 
 
 
@@ -138,6 +139,7 @@ sub reset {
     $self->{equal_structure} = [];
     $self->{external_structure}      = [];
     $self->{internal_fibonacci}      = [];
+     $self->{external_fibonacci} = undef;
 
     $self->{structural_pivots_clean} = [];
     $self->{audit}->{pivots} = [];
@@ -216,6 +218,17 @@ sub calculate_until {
         $until_index,
         $self->{external_swing_len},
     );
+        # ==============================================================
+    # FIBONACCI DEL ZIGZAG EXTERNO
+    #
+    # Se calcula únicamente sobre los dos últimos pivotes externos
+    # disponibles hasta until_index.
+    # ==============================================================
+    $self->{external_fibonacci}
+        = $self->_build_external_fibonacci(
+            $self->{external_structure},
+            $until_index,
+        );
 
     $self->{minor_pivots} = $self->{internal_structure};
     $self->{pivots}      = $self->{external_structure};
@@ -261,8 +274,14 @@ sub calculate_until {
         equal_levels        => $self->{equal_levels},
         clean_volume_swings => $self->{clean_volume_swings},
         audit               => $self->{audit},
-        internal_fibonacci => $self->{internal_fibonacci},
-        supply_demand_zones => $self->{supply_demand_zones},
+                internal_fibonacci =>
+            $self->{internal_fibonacci},
+
+        external_fibonacci =>
+            $self->{external_fibonacci},
+
+        supply_demand_zones =>
+            $self->{supply_demand_zones},
     };
 }
 
@@ -734,6 +753,221 @@ sub _build_internal_fibonacci_zzmtf {
     return \@levels;
 }
 
+# ==============================================================
+# FIBONACCI DEL ÚLTIMO TRAMO DEL ZIGZAG EXTERNO
+#
+# Utiliza exclusivamente los dos últimos pivotes externos:
+#
+# LOW  -> HIGH: retroceso desde HIGH hacia LOW.
+# HIGH -> LOW : retroceso desde LOW hacia HIGH.
+#
+# No modifica el ZigZag ni genera pivotes nuevos.
+# ==============================================================
+sub _build_external_fibonacci {
+    my (
+        $self,
+        $external_structure,
+        $until_index,
+    ) = @_;
+
+    return undef
+        if !$external_structure
+        || ref($external_structure) ne 'ARRAY'
+        || @{$external_structure} < 2;
+
+    return undef
+        if !defined $until_index
+        || $until_index < 0;
+
+    # Conservar únicamente pivotes válidos que ya pertenecen
+    # al rango permitido del cálculo actual.
+    my @pivots = grep {
+           $_
+        && ref($_) eq 'HASH'
+        && defined $_->{index}
+        && defined $_->{price}
+        && defined $_->{type}
+        && $_->{index} <= $until_index
+        && (
+               $_->{type} eq 'HIGH'
+            || $_->{type} eq 'LOW'
+        )
+    } @{$external_structure};
+
+    return undef
+        if @pivots < 2;
+
+    # La estructura externa ya viene cronológica, pero ordenar
+    # aquí evita depender de ese supuesto.
+    @pivots = sort {
+           $a->{index}
+        <=>
+           $b->{index}
+    } @pivots;
+
+    my $from = $pivots[-2];
+    my $to   = $pivots[-1];
+
+    return undef
+        if !$from
+        || !$to;
+
+    # Un tramo válido debe alternar HIGH/LOW.
+    return undef
+        if ($from->{type} // '')
+        eq
+        ($to->{type} // '');
+
+    return undef
+        if $to->{index} <= $from->{index};
+
+    my $from_price =
+        $from->{price};
+
+    my $to_price =
+        $to->{price};
+
+    return undef
+        if !defined $from_price
+        || !defined $to_price;
+
+    my $range =
+        abs(
+            $to_price
+            -
+            $from_price
+        );
+
+    return undef
+        if $range <= 0;
+
+    my $direction;
+
+    if (
+        $from->{type} eq 'LOW'
+        &&
+        $to->{type} eq 'HIGH'
+    ) {
+        $direction = 'UP';
+    }
+    elsif (
+        $from->{type} eq 'HIGH'
+        &&
+        $to->{type} eq 'LOW'
+    ) {
+        $direction = 'DOWN';
+    }
+    else {
+        return undef;
+    }
+
+    my @level_definitions = (
+        {
+            ratio => 0.382,
+            color => '#81c784',
+        },
+        {
+            ratio => 0.500,
+            color => '#26a69a',
+        },
+        {
+            ratio => 0.618,
+            color => '#2e7d32',
+        },
+        {
+            ratio => 0.705,
+            color => '#ef5350',
+        },
+        {
+            ratio => 0.786,
+            color => '#42a5f5',
+        },
+    );
+
+    my @levels;
+
+    for my $definition (@level_definitions) {
+        my $ratio =
+            $definition->{ratio};
+
+        my $price;
+
+        if ($direction eq 'UP') {
+            # Último impulso:
+            #
+            # LOW -> HIGH
+            #
+            # El retroceso se mide desde el HIGH hacia el LOW:
+            #
+            # 0.000 = HIGH
+            # 1.000 = LOW
+            $price =
+                  $to_price
+                - ($range * $ratio);
+        }
+        else {
+            # Último impulso:
+            #
+            # HIGH -> LOW
+            #
+            # El retroceso se mide desde el LOW hacia el HIGH:
+            #
+            # 0.000 = LOW
+            # 1.000 = HIGH
+            $price =
+                  $to_price
+                + ($range * $ratio);
+        }
+
+        push @levels, {
+            ratio => $ratio,
+            price => $price,
+            color => $definition->{color},
+
+            from_index => $from->{index},
+            to_index   => $to->{index},
+
+            direction => $direction,
+
+            source => 'EXTERNAL_ZIGZAG_FIBONACCI',
+        };
+    }
+
+    return {
+        source =>
+            'EXTERNAL_ZIGZAG_FIBONACCI',
+
+        direction =>
+            $direction,
+
+        from_index =>
+            $from->{index},
+
+        to_index =>
+            $to->{index},
+
+        from_price =>
+            $from_price,
+
+        to_price =>
+            $to_price,
+
+        from_type =>
+            $from->{type},
+
+        to_type =>
+            $to->{type},
+
+        # Los niveles se proyectan hasta la última vela
+        # actualmente permitida.
+        projection_end_index =>
+            $until_index,
+
+        levels =>
+            \@levels,
+    };
+
+}
 
 sub _build_external_zigzag_chartprime {
     my ($self, $candles, $until_index, $swing_len) = @_;
