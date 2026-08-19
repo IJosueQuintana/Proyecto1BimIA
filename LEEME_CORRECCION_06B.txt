@@ -1,0 +1,33 @@
+CORRECCION CAMBIO 06B
+
+1. SequentialFeatureExtractor.pm
+- Corrige last_structure_event para reconocer los nombres reales:
+  BOS_UP, BOS_DOWN, CHoCH_UP y CHoCH_DOWN.
+- Usa raw_type como primera fuente, igual que SMC_Structures.pm.
+- Codificacion:
+  BOS_UP=1, BOS_DOWN=-1, CHoCH_UP=2, CHoCH_DOWN=-2, sin evento=0.
+
+2. TemporalStateLabeler.pm
+- outcome_target ahora usa primer cruce de umbral dentro del horizonte.
+- RUN_UP si el umbral superior se alcanza primero.
+- RUN_DOWN si el umbral inferior se alcanza primero.
+- NONE si no se alcanza ninguno o ambos se atraviesan en la misma vela,
+  porque no se conoce el orden intravela con datos OHLC.
+- event_target ya no asigna GRAB automaticamente: queda NONE si no se
+  supera ni el high ni el low de la vela de referencia.
+
+VALIDACION SOBRE MUESTRA DE 11920 FILAS
+- Features constantes: ninguna.
+- last_structure_event presenta varios valores.
+- Compilacion Perl: OK.
+
+RECONSTRUIR DATASET COMPLETO
+perl -I. build_sequential_dataset.pl \
+  --file 2026_03.csv \
+  --file 2026_06_29.csv \
+  --file 2026_07_06.csv \
+  --file 2026_07_13.csv \
+  --out datasets/sequential_features_1m.csv
+
+AUDITAR
+perl -I. audit_sequential_dataset.pl datasets/sequential_features_1m.csv

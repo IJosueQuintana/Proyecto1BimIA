@@ -1,0 +1,11 @@
+FINAL DATA AUDIT
+================
+2026_04.csv: data_rows=29888; sha256=a98997a03acb6cec80505583a35af347e85e6ae5d679632b86395dcaf17f582a
+2026_05.csv: data_rows=28740; sha256=655adb58ac425f2ac2e9821930c5e70e5eb6e6d25fc90b520bb2a8f511cd143c
+2026_06.csv: data_rows=30108; sha256=235fa2c135bfc37993a475ec7ecde06617193f226bfd618c61867008c83cd1a5
+2026_Abril-Junio.csv: data_rows=88736; sha256=16de7a6c7f541a50d132013c1615cbf680baa602d2cf2eb5a75fef7b75c29dfa
+2026_07_24.csv: data_rows=24179; sha256=784f45a959380ff94e87ce88914ad83c324a377eb18ebcc7717c590eaf671ec2
+April+May+June exactly equals consolidated 2026_Abril-Junio.csv: YES
+train_ghost_features.csv: data_rows=433
+test_ghost_features.csv: data_rows=107
+test_predictions.csv: data_rows=107

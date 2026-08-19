@@ -1,0 +1,17 @@
+CAMBIO 08 - AUDITORIA Y CALIBRACION DEL HMM
+
+Objetivo:
+- Confirmar que etiquetas/targets no entren en X.
+- Reducir falsos positivos de EXPANSION usando probabilidades posteriores.
+- Elegir calibracion solamente con VALIDATION.
+- Mantener TEST completamente reservado.
+
+Orden:
+1) perl -I. audit_hmm_features.pl
+2) perl -I. calibrate_hmm_states.pl
+3) perl -I. evaluate_calibrated_hmm.pl
+
+Archivos generados:
+models/hmm_state_calibration.bin
+
+No reconstruir dataset ni reentrenar GMM/HMM.

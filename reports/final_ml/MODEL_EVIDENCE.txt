@@ -1,0 +1,28 @@
+FINAL ML MODEL EVIDENCE
+=======================
+Order: t-SNE -> HMM -> GMM
+Train events: 433
+Test events: 107
+Features causal scaler: 132
+t-SNE anchors: 90
+t-SNE perplexity: 25
+t-SNE KL: 0.327720234092377
+HMM log-likelihood: -1713.12068011789
+GMM components: 7
+GMM BIC: -47712.1738330744
+GMM converged: 1
+GMM selected features: 39
+
+HMM transition matrix
+QUIET -> QUIET=0.4081, ACTIVE=0.4206, INTENSE=0.1713
+ACTIVE -> QUIET=0.3372, ACTIVE=0.3948, INTENSE=0.2680
+INTENSE -> QUIET=0.3632, ACTIVE=0.3731, INTENSE=0.2637
+
+GMM weights
+cluster_0=0.281583
+cluster_1=0.171171
+cluster_2=0.014304
+cluster_3=0.360149
+cluster_4=0.009383
+cluster_5=0.114528
+cluster_6=0.048882

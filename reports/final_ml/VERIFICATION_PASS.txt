@@ -1,0 +1,14 @@
+[OK] data_final/2026_04.csv
+[OK] data_final/2026_05.csv
+[OK] data_final/2026_06.csv
+[OK] data_final/2026_07_24.csv
+[OK] datasets/final_ml/train_ghost_features.csv
+[OK] datasets/final_ml/test_ghost_features.csv
+[OK] datasets/final_ml/test_predictions.csv
+[OK] models/final_ml/ghost_tsne_hmm_gmm.bin
+[OK] reports/final_ml/FINAL_ML_REPORT.md
+[OK] contrato causal: 132 features; targets/futuro excluidos
+[OK] modelo cargado y prediccion ejecutada
+[OK] salidas 3/5/10/15 presentes
+
+FINAL ML VERIFICATION: PASS

@@ -1,0 +1,10 @@
+metric,value,detail
+rows,288,TRAIN + VALIDATION; TEST no auditado
+columns,81,Columnas originales
+numeric_features,62,
+categorical_features,18,
+missing_cells,0,
+duplicate_groups,2,"Grupos, no filas individuales"
+constant_features,5,
+near_constant_features,13,
+rows_per_numeric_feature,4.64516129032258,Indicador simple de dimensionalidad
