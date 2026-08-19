@@ -16,6 +16,9 @@ use Market::Indicators::Liquidity;
 use Market::Indicators::SMC_Structures;
 use Market::ChartEngine;
 use Market::Debug::LiquidityDebug;
+use Market::ML::PivotFeatureExtractor;
+use Market::ML::DatasetExporter;
+use Market::ML::DatasetValidator;
 
 my $csv = $ARGV[0] || "$FindBin::Bin/2026_07_20.csv";
 print "Cargando datos desde '$csv'...\n";
@@ -106,6 +109,133 @@ my $smc_result = $smc->calculate(
     $liq_result->{structural_pivots},
     $market
 );
+
+# ================================================================
+# GENERACIÓN DEL DATASET DE PIVOTES
+# ================================================================
+
+my $feature_extractor =
+    Market::ML::PivotFeatureExtractor->new(
+        volume_lookback => 20,
+        symbol          => 'MARKET',
+        timeframe       => 1,
+    );
+
+my $dataset_rows =
+    $feature_extractor->extract(
+        candles =>
+            $market->get_slice(
+                0,
+                $market->last_index()
+            ),
+
+        pivots =>
+            $smc_result->{structure},
+
+        atr =>
+            $atr_values,
+
+        liquidity =>
+            $liq_result->{liquidity},
+
+        structure_events =>
+            $smc_result->{events},
+
+        equal_levels =>
+            $liq_result->{equal_levels},
+
+        fvg_levels =>
+            $smc_result->{fvg},
+
+        order_blocks =>
+            $smc_result->{order_blocks},
+
+        symbol =>
+            'MARKET',
+
+        timeframe =>
+            1,
+    );
+
+my $dataset_exporter =
+    Market::ML::DatasetExporter->new();
+
+my $dataset_file =
+    "$FindBin::Bin/datasets/pivot_features_1m.csv";
+
+my $exported_rows =
+    $dataset_exporter->export_csv(
+        file =>
+            $dataset_file,
+
+        rows =>
+            $dataset_rows,
+
+        columns =>
+            $feature_extractor->feature_names(),
+    );
+
+
+    # ================================================================
+# DATASET ENTRENABLE
+# ================================================================
+
+my $trainable_rows =
+    $dataset_exporter->filter_trainable_rows(
+        rows => $dataset_rows,
+    );
+
+my $trainable_file =
+    "$FindBin::Bin/datasets/pivot_features_1m_trainable.csv";
+
+my $trainable_count =
+    $dataset_exporter->export_csv(
+        file =>
+            $trainable_file,
+
+        rows =>
+            $trainable_rows,
+
+        columns =>
+            $feature_extractor->feature_names(),
+    );
+
+print "\n=== DATASET ML ===\n";
+print "Archivo general: $dataset_file\n";
+print "Filas generales: $exported_rows\n";
+print "Archivo entrenable: $trainable_file\n";
+print "Filas entrenables: $trainable_count\n";
+print "Filas excluidas: "
+    . ($exported_rows - $trainable_count)
+    . "\n";
+print "Columnas: "
+    . scalar(
+        @{$feature_extractor->feature_names()}
+    )
+    . "\n";
+print "==================\n\n";
+
+
+# ================================================================
+# VALIDACIÓN DEL DATASET
+# ================================================================
+
+my $dataset_validator =
+    Market::ML::DatasetValidator->new(
+        verbose => 1,
+    );
+
+my $validation_report =
+    $dataset_validator->validate(
+        rows => $dataset_rows,
+    );
+
+$dataset_validator->print_report(
+    $validation_report
+);
+
+
+
 
 print "\n=== PRUEBA LIQUIDITY ===\n";
 print "Pivots detectados: " . scalar(@{$liq_result->{pivots}}) . "\n";

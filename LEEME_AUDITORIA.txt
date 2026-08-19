@@ -1,0 +1,42 @@
+CAMBIO 05 - AUDITORÍA PROFUNDA DEL DATASET
+
+ARCHIVOS:
+- Market/ML/DatasetAuditor.pm (nuevo)
+- audit_dataset.pl (nuevo)
+
+INSTALACIÓN:
+1. Copiar el contenido de esta carpeta en la raíz de Proyecto1.1BimIA.
+2. No reemplaza módulos existentes.
+3. Ejecutar primero el pipeline normal:
+
+   perl ml_pipeline.pl
+
+4. Después ejecutar:
+
+   perl -I. -c Market/ML/DatasetAuditor.pm
+   perl -I. -c audit_dataset.pl
+   perl audit_dataset.pl
+
+SALIDA:
+Se crea la carpeta:
+
+datasets/ml_pipeline/audit/
+
+con los archivos:
+- AUDIT_REPORT.md
+- dataset_quality.csv
+- feature_statistics.csv
+- feature_correlations.csv
+- feature_covariance.csv
+- feature_signal.csv
+- duplicate_rows.csv
+- label_statistics.csv
+- label_transitions.csv
+- session_distribution.csv
+- outliers.csv
+- suspicious_rows.csv
+
+IMPORTANTE:
+- Solo lee TRAIN y VALIDATION.
+- TEST FINAL permanece reservado y no se analiza.
+- No modifica etiquetas, features, modelos ni archivos CSV originales.

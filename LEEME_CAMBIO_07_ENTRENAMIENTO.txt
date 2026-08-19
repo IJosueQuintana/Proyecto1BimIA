@@ -1,0 +1,29 @@
+CAMBIO 07 - ENTRENAMIENTO SECUENCIAL GMM/HMM
+
+Archivos nuevos:
+Market/ML/SequentialDatasetLoader.pm
+Market/ML/SequentialGMMTrainer.pm
+Market/ML/SequentialHMMTrainer.pm
+Market/ML/ModelSerializer.pm
+Market/ML/GhostStateMachine.pm
+train_gmm.pl
+train_hmm.pl
+evaluate_sequential_models.pl
+
+Separación fija:
+TRAIN: 2026_03.csv, 2026_06_29.csv, 2026_07_06.csv
+VALIDATION: 2026_07_13.csv
+TEST: no se lee ni se evalúa.
+
+Ejecución:
+perl -I. train_gmm.pl
+perl -I. train_hmm.pl
+perl -I. evaluate_sequential_models.pl
+
+Modelos generados:
+models/sequential_gmm.bin
+models/sequential_hmm.bin
+
+El StandardScaler se ajusta exclusivamente con TRAIN.
+El mapeo cluster->estado del GMM también se aprende exclusivamente con TRAIN.
+El HMM aprende probabilidades iniciales, transiciones y emisiones usando TRAIN.

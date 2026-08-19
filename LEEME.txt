@@ -1,0 +1,64 @@
+CAMBIO 06A.2 — COMPARACIÓN V1 VS V2
+====================================
+
+ARCHIVOS NUEVOS
+---------------
+Market/ML/DatasetVersionComparator.pm
+compare_v1_v2.pl
+
+NO reemplaza archivos actuales.
+
+REQUISITOS
+----------
+Debe haberse ejecutado previamente:
+
+  perl ml_pipeline.pl
+  perl build_dataset_v2.pl
+
+Además deben existir los módulos ya implementados en cambios anteriores:
+- Market::ML::FeatureSchema
+- Market::ML::StandardScaler
+- Market::ML::GaussianMixtureModel
+- Market::ML::ClassificationMetrics
+- Market::ML::TSNEPipeline
+
+INSTALACIÓN
+-----------
+Extraer el ZIP en la raíz de Proyecto1.1BimIA.
+
+VERIFICACIÓN
+------------
+  perl -I. -c Market/ML/DatasetVersionComparator.pm
+  perl -I. -c compare_v1_v2.pl
+
+EJECUCIÓN
+---------
+  perl compare_v1_v2.pl
+
+TEST FINAL
+----------
+El script no abre ningún archivo TEST.
+
+EXPERIMENTO
+-----------
+- Compara V1 y V2 con 2, 3, 4 y 5 componentes GMM.
+- Ajusta StandardScaler exclusivamente con TRAIN de cada versión.
+- Aprende el mapeo componente -> RUN/GRAB/SWEEP exclusivamente con TRAIN.
+- Evalúa en VALIDATION.
+- Usa igual semilla para ambas versiones.
+- Genera t-SNE V1 y V2 con igual configuración.
+- Reporta distribución de filas por componente para detectar colapso.
+
+SALIDAS
+-------
+datasets/ml_pipeline/comparison_v1_v2/
+  COMPARISON_REPORT.md
+  gmm_comparison.csv
+  tsne_v1.csv
+  tsne_v2.csv
+
+ARCHIVOS A COMPARTIR
+--------------------
+- Salida completa de perl compare_v1_v2.pl
+- COMPARISON_REPORT.md
+- gmm_comparison.csv

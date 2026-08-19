@@ -17,3 +17,6 @@ contexto_proyecto.md
 
 # Logs
 *.log
+
+# Cache/temporales del pipeline ML final
+reports/final_ml/*.tmp
