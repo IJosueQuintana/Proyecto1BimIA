@@ -1,0 +1,81 @@
+feature,type,n,eta_squared,mutual_information,note
+pivot_id,numeric,288,0.00168822185098195,0.00267581075155978,MI con discretizaciÃ³n por cuartiles
+timeframe,numeric,288,0,0,MI con discretizaciÃ³n por cuartiles
+pivot_index,numeric,288,0.00134726412980888,0.00176871865563101,MI con discretizaciÃ³n por cuartiles
+confirmation_index,numeric,288,0.00134726412980888,0.00176871865563101,MI con discretizaciÃ³n por cuartiles
+confirmation_delay,numeric,288,0,0,MI con discretizaciÃ³n por cuartiles
+pivot_open,numeric,288,0.000903045990099139,0.00489883331393821,MI con discretizaciÃ³n por cuartiles
+pivot_high,numeric,288,0.000894779159857709,0.00312559135611227,MI con discretizaciÃ³n por cuartiles
+pivot_low,numeric,288,0.000994238268348958,0.00489883331393821,MI con discretizaciÃ³n por cuartiles
+pivot_close,numeric,288,0.000953880288710301,0.00563646900663111,MI con discretizaciÃ³n por cuartiles
+pivot_price,numeric,288,0.000952094662278458,0.00657622250628483,MI con discretizaciÃ³n por cuartiles
+pivot_volume,numeric,288,0.0132879956324731,0.00836390918353156,MI con discretizaciÃ³n por cuartiles
+pivot_range,numeric,288,0.0185921128075472,0.00757143494468396,MI con discretizaciÃ³n por cuartiles
+pivot_body,numeric,288,0.0144161276010639,0.0157788290196315,MI con discretizaciÃ³n por cuartiles
+upper_wick,numeric,288,0.00196678750481756,0.00823299113983657,MI con discretizaciÃ³n por cuartiles
+lower_wick,numeric,288,0.0174581870569068,0.00918107122594572,MI con discretizaciÃ³n por cuartiles
+close_position,numeric,288,0.00084188367633061,0.0122807559086992,MI con discretizaciÃ³n por cuartiles
+confirm_open,numeric,288,0.000903045990099139,0.00489883331393821,MI con discretizaciÃ³n por cuartiles
+confirm_high,numeric,288,0.000894779159857709,0.00312559135611227,MI con discretizaciÃ³n por cuartiles
+confirm_low,numeric,288,0.000994238268348958,0.00489883331393821,MI con discretizaciÃ³n por cuartiles
+confirm_close,numeric,288,0.000953880288710301,0.00563646900663111,MI con discretizaciÃ³n por cuartiles
+confirm_volume,numeric,288,0.0132879956324731,0.00836390918353156,MI con discretizaciÃ³n por cuartiles
+atr_14,numeric,288,0.00384094357302729,0.00224251162141017,MI con discretizaciÃ³n por cuartiles
+range_atr_ratio,numeric,288,0.0197327130370586,0.00854391743136204,MI con discretizaciÃ³n por cuartiles
+body_atr_ratio,numeric,288,0.0135751140042054,0.00841436762226345,MI con discretizaciÃ³n por cuartiles
+price_to_confirm_close,numeric,288,9.96270782047357e-05,0.0136796205749783,MI con discretizaciÃ³n por cuartiles
+volume_mean_20,numeric,288,0.00562368749237328,0.00576206006657422,MI con discretizaciÃ³n por cuartiles
+volume_std_20,numeric,288,0.00811580038065184,0.00352658497466692,MI con discretizaciÃ³n por cuartiles
+volume_ratio_20,numeric,288,0.00383054339742689,0.0124885703473001,MI con discretizaciÃ³n por cuartiles
+volume_zscore_20,numeric,288,0.00399732981949152,0.00757449156657522,MI con discretizaciÃ³n por cuartiles
+previous_pivot_price,numeric,288,0.000741147666538208,0.00143183043640582,MI con discretizaciÃ³n por cuartiles
+distance_previous_pivot,numeric,288,0.0338263600542907,0.0229704687418797,MI con discretizaciÃ³n por cuartiles
+bars_previous_pivot,numeric,288,0.0176834256639624,0.0257260627963244,MI con discretizaciÃ³n por cuartiles
+swing_size_atr,numeric,288,0.0159332287440099,0.0192621240657531,MI con discretizaciÃ³n por cuartiles
+swept_index,numeric,288,0.00230315938610701,0.00409272775044843,MI con discretizaciÃ³n por cuartiles
+resolved_index,numeric,288,0.00229471224158555,0.00409272775044843,MI con discretizaciÃ³n por cuartiles
+bars_since_structure_event,numeric,288,0.00036890803470706,0.0155455101940328,MI con discretizaciÃ³n por cuartiles
+distance_last_structure_event_atr,numeric,288,0.00132435943084479,0.0149358607856253,MI con discretizaciÃ³n por cuartiles
+bos_count_previous_20,numeric,288,0.0163208748610552,0.00859517220294493,MI con discretizaciÃ³n por cuartiles
+choch_count_previous_20,numeric,288,0.0118861603748049,0.00612089993340638,MI con discretizaciÃ³n por cuartiles
+near_equal_level,numeric,288,0.0055940249396548,0.0027850645415581,MI con discretizaciÃ³n por cuartiles
+distance_equal_level_atr,numeric,288,0.0156621583434616,0.0260183133123456,MI con discretizaciÃ³n por cuartiles
+bars_since_equal_level,numeric,288,0.0228136428206203,0.00841842965970023,MI con discretizaciÃ³n por cuartiles
+inside_fvg,numeric,288,0.0176173675689427,0,MI con discretizaciÃ³n por cuartiles
+distance_fvg_atr,numeric,288,0.0176578931983373,0.00833316855118859,MI con discretizaciÃ³n por cuartiles
+fvg_size_atr,numeric,288,0.000612620359972272,0.0166920976499673,MI con discretizaciÃ³n por cuartiles
+bars_since_fvg,numeric,288,0.0172443813885432,0.0127615753697083,MI con discretizaciÃ³n por cuartiles
+fvg_mitigated,numeric,288,0.0120794112274583,0,MI con discretizaciÃ³n por cuartiles
+active_fvg_count_50,numeric,288,0.0122114481572905,0.0159109191420935,MI con discretizaciÃ³n por cuartiles
+inside_order_block,numeric,288,0.00151224344905964,0.000773847115819491,MI con discretizaciÃ³n por cuartiles
+distance_ob_atr,numeric,288,0.00244182459896909,0.0166100904476394,MI con discretizaciÃ³n por cuartiles
+ob_size_atr,numeric,288,0.00349502523783011,0.00678042957684028,MI con discretizaciÃ³n por cuartiles
+bars_since_ob,numeric,288,0.0154269682092244,0.0103728496118475,MI con discretizaciÃ³n por cuartiles
+ob_invalidated,numeric,288,0.00513591907779591,0,MI con discretizaciÃ³n por cuartiles
+active_ob_count_50,numeric,288,0.0115688513482506,0.00649135711083787,MI con discretizaciÃ³n por cuartiles
+bsl_count_previous_100,numeric,288,0.00276146041465869,0.00200896515765412,MI con discretizaciÃ³n por cuartiles
+ssl_count_previous_100,numeric,288,0.00407583387536447,0.00838048220080178,MI con discretizaciÃ³n por cuartiles
+active_bsl_count,numeric,288,0.00423579592631893,0.0171075818429488,MI con discretizaciÃ³n por cuartiles
+active_ssl_count,numeric,288,0.000834730578708358,0.00434131399751634,MI con discretizaciÃ³n por cuartiles
+distance_nearest_bsl_atr,numeric,288,0.00480624261837682,0.00349072650544656,MI con discretizaciÃ³n por cuartiles
+distance_nearest_ssl_atr,numeric,288,0.00696427991326961,0.0117188908029064,MI con discretizaciÃ³n por cuartiles
+equal_levels_previous_100,numeric,288,0.00035077946960284,0.0111437716743465,MI con discretizaciÃ³n por cuartiles
+liquidity_imbalance_100,numeric,288,0.000599907858079136,0.0235782275741055,MI con discretizaciÃ³n por cuartiles
+dataset_date,categorical,288,,0.00726373147802911,MI discreta
+source_file,categorical,288,,0.00726373147802912,MI discreta
+symbol,categorical,288,,0,MI discreta
+pivot_timestamp,categorical,288,,1.04312915939004,MI discreta
+confirmation_timestamp,categorical,288,,1.04312915939004,MI discreta
+pivot_side,categorical,288,,0.000378506031230716,MI discreta
+structure_type,categorical,288,,0.00379607194640603,MI discreta
+structure_mode,categorical,288,,0,MI discreta
+source,categorical,288,,0.00561320627138948,MI discreta
+candle_direction,categorical,288,,0.0108792899167165,MI discreta
+previous_pivot_type,categorical,288,,0.00026595195636108,MI discreta
+liquidity_type,categorical,288,,0.000378506031230716,MI discreta
+liquidity_state,categorical,288,,0,MI discreta
+last_structure_event,categorical,288,,0.00857084896794139,MI discreta
+last_structure_event_direction,categorical,288,,0.000947630680466653,MI discreta
+equal_level_type,categorical,288,,0.00677124739613916,MI discreta
+nearest_fvg_type,categorical,288,,0.00370455689359783,MI discreta
+nearest_ob_type,categorical,288,,0.00328489763471321,MI discreta

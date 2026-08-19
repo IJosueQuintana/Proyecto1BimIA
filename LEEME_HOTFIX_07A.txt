@@ -1,0 +1,16 @@
+HOTFIX 07A
+
+Corrige el error:
+Can't locate object method "predict_labels" via package "Market::ML::SequentialGMMTrainer"
+
+Reemplaza:
+- Market/ML/SequentialGMMTrainer.pm
+- evaluate_sequential_models.pl
+
+No es necesario reconstruir el dataset ni reentrenar GMM/HMM.
+
+Comandos:
+unzip -o Cambio_07A_Hotfix_GMM_Evaluator.zip
+perl -I. -c Market/ML/SequentialGMMTrainer.pm
+perl -I. -c evaluate_sequential_models.pl
+perl -I. evaluate_sequential_models.pl

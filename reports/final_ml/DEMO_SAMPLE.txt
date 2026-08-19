@@ -1,0 +1,15 @@
+
+DEMO MODELO CARGADO: t-SNE -> HMM -> GMM
+TEST: 2026_07_24.csv | ghost=EXTERNAL_SWING_CONFIRMATION
+
+timestamp            3m      5m      10m     15m     HMM       GMM    
+2026-07-01T02:18:00  2/3    3/5    5/7    6/9    INTENSE   0      
+2026-07-01T06:05:00  2/1    3/2    5/5    6/7    ACTIVE    3      
+2026-07-01T08:35:00  2/2    3/3    5/5    7/9    ACTIVE    1      
+2026-07-01T10:31:00  2/2    3/4    5/6    7/7    ACTIVE    3      
+2026-07-01T19:04:00  2/2    3/4    5/6    7/6    ACTIVE    1      
+2026-07-01T21:15:00  2/3    3/5    5/8    6/9    QUIET     3      
+2026-07-02T02:17:00  2/2    3/2    5/2    7/6    ACTIVE    1      
+2026-07-02T07:37:00  2/2    3/3    5/5    6/7    ACTIVE    3      
+
+Formato: predicho/real. Las predicciones provienen de un modelo cargado desde disco.

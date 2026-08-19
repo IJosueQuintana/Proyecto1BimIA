@@ -1,0 +1,13 @@
+Copie tsne_seed_compare.pl en la raíz de Proyecto1.1BimIA.
+
+Ejecución definitiva:
+  perl tsne_seed_compare.pl 30 750 10 42 7 123
+
+Argumentos:
+  30       perplexity
+  750      iteraciones
+  10       vecinos locales comparados
+  42 7 123 semillas
+
+El script no usa TEST FINAL, no reemplaza el CSV actual y no genera reportes.
+Solo imprime en terminal la comparación y el nivel de influencia de la semilla.

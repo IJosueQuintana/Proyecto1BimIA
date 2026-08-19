@@ -1,0 +1,26 @@
+CAMBIO 06A — DATASET DE PIVOTES V2
+
+Archivos nuevos:
+- Market/ML/DatasetV2Builder.pm
+- build_dataset_v2.pl
+
+Ejecución:
+1. perl ml_pipeline.pl
+2. perl -I. -c Market/ML/DatasetV2Builder.pm
+3. perl -I. -c build_dataset_v2.pl
+4. perl build_dataset_v2.pl
+
+Salida:
+datasets/ml_pipeline/v2/
+- train_v2.csv
+- validation_v2.csv
+- FEATURE_SELECTION_REPORT.md
+- selected_features.txt
+- removed_duplicate_rows.csv
+
+Garantías:
+- No reemplaza archivos actuales.
+- No lee TEST.
+- No modifica etiquetas.
+- Excluye constantes, metadatos predictivos, índices futuros y precios absolutos redundantes.
+- Prioriza variables estadísticas normalizadas y de contexto.

@@ -1,0 +1,22 @@
+# Configuración local de editores
+.vscode/
+
+# Metadatos de Windows
+*:Zone.Identifier
+*:Zone.Identifier:Zone.Identifier
+
+# Archivos temporales
+*.tmp
+*.bak
+*.swp
+*~
+
+# Contextos generados
+repomix-output.*
+contexto_proyecto.md
+
+# Logs
+*.log
+
+# Cache/temporales del pipeline ML final
+reports/final_ml/*.tmp

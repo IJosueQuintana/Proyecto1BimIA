@@ -1,0 +1,15 @@
+CAMBIO 07B - CARGA DE CLASES SERIALIZADAS
+
+Causa:
+ModelSerializer recupera objetos bendecidos con Storable, pero el evaluador no
+importaba SequentialGMMTrainer ni SequentialHMMTrainer. Por ello $gmm->can(...)
+retornaba falso aunque los métodos sí existían en el archivo del módulo.
+
+Instalación desde la raíz del proyecto:
+  cp Cambio_07B/evaluate_sequential_models.pl evaluate_sequential_models.pl
+
+Verificación:
+  perl -I. -c evaluate_sequential_models.pl
+  perl -I. evaluate_sequential_models.pl
+
+No es necesario reentrenar GMM ni HMM.

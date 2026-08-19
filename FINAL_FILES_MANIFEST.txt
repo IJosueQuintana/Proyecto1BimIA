@@ -1,0 +1,41 @@
+FINAL ML ADDITIONS / DELIVERY GUIDE
+==================================
+
+Core ML modules:
+- Market/ML/FinalGhostFeatureSchema.pm
+- Market/ML/FinalGhostDatasetBuilder.pm
+- Market/ML/FinalGhostIO.pm
+- Market/ML/FinalGhostModel.pm
+- Market/ML/HiddenMarkovModel.pm (public training log-likelihood accessor)
+
+Executable entry points:
+- final_ml_pipeline.pl
+- verify_final_ml.pl
+- final_ml_demo.pl
+- final_ml_evidence.pl
+
+Official source data:
+- data_final/2026_04.csv
+- data_final/2026_05.csv
+- data_final/2026_06.csv
+- data_final/2026_Abril-Junio.csv
+- data_final/2026_07_24.csv
+- docs_final/Indicaciones-Proyecto-parte-final_v1.0.docx
+
+Generated ML artifacts:
+- datasets/final_ml/train_ghost_features.csv
+- datasets/final_ml/test_ghost_features.csv
+- datasets/final_ml/test_predictions.csv
+- datasets/final_ml/tsne_hmm_gmm_embedding.csv
+- models/final_ml/ghost_tsne_hmm_gmm.bin
+
+Evidence / documentation:
+- README_FINAL_ML.md
+- FINAL_CHECKLIST.md
+- GIT_ENTREGA_FINAL.md
+- reports/final_ml/FINAL_ML_REPORT.md
+- reports/final_ml/MODEL_EVIDENCE.txt
+- reports/final_ml/DATA_AUDIT.txt
+- reports/final_ml/VERIFICATION_PASS.txt
+- reports/final_ml/DEMO_SAMPLE.txt
+- reports/final_ml/tsne_hmm_gmm.svg
